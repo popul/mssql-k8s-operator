@@ -1,4 +1,4 @@
-.PHONY: all build test generate manifests install deploy docker-build docker-push clean
+.PHONY: all build test test-integration test-all generate manifests install deploy docker-build docker-push clean lint
 
 IMG ?= mssql-k8s-operator:latest
 
@@ -8,25 +8,36 @@ build:
 	go build -o bin/manager ./cmd/main.go
 
 test:
-	go test ./... -count=1
+	go test ./... -count=1 -race
+
+test-integration:
+	go test -tags=integration ./internal/sql/... -count=1 -v -timeout=300s
+
+test-all: test test-integration
+
+CONTROLLER_GEN ?= $(shell go env GOPATH)/bin/controller-gen
 
 generate:
-	go generate ./...
+	$(CONTROLLER_GEN) object paths="./api/..."
 
 manifests:
-	@echo "TODO: generate CRD manifests with controller-gen"
+	$(CONTROLLER_GEN) crd paths="./api/..." output:crd:dir=charts/mssql-operator/crds
+	$(CONTROLLER_GEN) rbac:roleName=mssql-operator-manager paths="./internal/controller/..." output:rbac:dir=config/rbac
 
 install:
-	@echo "TODO: install CRDs via kubectl apply"
+	kubectl apply -f charts/mssql-operator/crds/
 
 deploy:
-	@echo "TODO: deploy operator via kustomize"
+	helm upgrade --install mssql-operator charts/mssql-operator/ --namespace mssql-operator-system --create-namespace
 
 docker-build:
 	docker build -t $(IMG) .
 
 docker-push:
 	docker push $(IMG)
+
+lint:
+	golangci-lint run ./...
 
 clean:
 	rm -rf bin/

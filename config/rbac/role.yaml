@@ -1,0 +1,53 @@
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: mssql-operator-manager
+rules:
+- apiGroups:
+  - ""
+  resources:
+  - events
+  verbs:
+  - create
+  - patch
+- apiGroups:
+  - ""
+  resources:
+  - secrets
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - mssql.popul.io
+  resources:
+  - databases
+  - databaseusers
+  - logins
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - mssql.popul.io
+  resources:
+  - databases/finalizers
+  - databaseusers/finalizers
+  - logins/finalizers
+  verbs:
+  - update
+- apiGroups:
+  - mssql.popul.io
+  resources:
+  - databases/status
+  - databaseusers/status
+  - logins/status
+  verbs:
+  - get
+  - patch
+  - update
