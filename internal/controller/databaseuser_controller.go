@@ -12,11 +12,15 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/record"
+	"k8s.io/client-go/util/workqueue"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
+	"golang.org/x/time/rate"
 
 	v1alpha1 "github.com/popul/mssql-k8s-operator/api/v1alpha1"
 	opmetrics "github.com/popul/mssql-k8s-operator/internal/metrics"
@@ -95,8 +99,10 @@ func (r *DatabaseUserReconciler) Reconcile(ctx context.Context, req ctrl.Request
 	}
 	defer sqlClient.Close()
 
-	// 6. Observe
-	exists, err := sqlClient.UserExists(ctx, dbUser.Spec.DatabaseName, dbUser.Spec.UserName)
+	// 6. Observe (with SQL timeout)
+	sqlCtx, cancel := sqlContext(ctx)
+	defer cancel()
+	exists, err := sqlClient.UserExists(sqlCtx, dbUser.Spec.DatabaseName, dbUser.Spec.UserName)
 	if err != nil {
 		return ctrl.Result{}, fmt.Errorf("failed to check user existence: %w", err)
 	}
@@ -104,7 +110,9 @@ func (r *DatabaseUserReconciler) Reconcile(ctx context.Context, req ctrl.Request
 	// 7. Compare & Act
 	loginName := login.Spec.LoginName
 	if !exists {
-		if err := sqlClient.CreateUser(ctx, dbUser.Spec.DatabaseName, dbUser.Spec.UserName, loginName); err != nil {
+		sqlCtx2, cancel2 := sqlContext(ctx)
+		defer cancel2()
+		if err := sqlClient.CreateUser(sqlCtx2, dbUser.Spec.DatabaseName, dbUser.Spec.UserName, loginName); err != nil {
 			return ctrl.Result{}, fmt.Errorf("failed to create user %s: %w", dbUser.Spec.UserName, err)
 		}
 		r.Recorder.Event(&dbUser, corev1.EventTypeNormal, "DatabaseUserCreated",
@@ -125,7 +133,9 @@ func (r *DatabaseUserReconciler) Reconcile(ctx context.Context, req ctrl.Request
 }
 
 func (r *DatabaseUserReconciler) reconcileDatabaseRoles(ctx context.Context, dbUser *v1alpha1.DatabaseUser, sqlClient sqlclient.SQLClient, dbName, userName string, desiredRoles []string) error {
-	currentRoles, err := sqlClient.GetUserDatabaseRoles(ctx, dbName, userName)
+	sqlCtx, cancel := sqlContext(ctx)
+	defer cancel()
+	currentRoles, err := sqlClient.GetUserDatabaseRoles(sqlCtx, dbName, userName)
 	if err != nil {
 		return fmt.Errorf("failed to get database roles: %w", err)
 	}
@@ -136,7 +146,9 @@ func (r *DatabaseUserReconciler) reconcileDatabaseRoles(ctx context.Context, dbU
 	// Add missing roles
 	for role := range desiredSet {
 		if !currentSet[role] {
-			if err := sqlClient.AddUserToDatabaseRole(ctx, dbName, userName, role); err != nil {
+			sqlCtx2, cancel2 := sqlContext(ctx)
+			defer cancel2()
+			if err := sqlClient.AddUserToDatabaseRole(sqlCtx2, dbName, userName, role); err != nil {
 				return fmt.Errorf("failed to add role %s: %w", role, err)
 			}
 			r.Recorder.Event(dbUser, corev1.EventTypeNormal, "DatabaseRoleAdded",
@@ -147,7 +159,9 @@ func (r *DatabaseUserReconciler) reconcileDatabaseRoles(ctx context.Context, dbU
 	// Remove extra roles
 	for role := range currentSet {
 		if !desiredSet[role] {
-			if err := sqlClient.RemoveUserFromDatabaseRole(ctx, dbName, userName, role); err != nil {
+			sqlCtx3, cancel3 := sqlContext(ctx)
+			defer cancel3()
+			if err := sqlClient.RemoveUserFromDatabaseRole(sqlCtx3, dbName, userName, role); err != nil {
 				return fmt.Errorf("failed to remove role %s: %w", role, err)
 			}
 			r.Recorder.Event(dbUser, corev1.EventTypeNormal, "DatabaseRoleRemoved",
@@ -176,7 +190,9 @@ func (r *DatabaseUserReconciler) handleDeletion(ctx context.Context, dbUser *v1a
 			defer sqlClient.Close()
 
 			// Check if user owns objects
-			owns, err := sqlClient.UserOwnsObjects(ctx, dbUser.Spec.DatabaseName, dbUser.Spec.UserName)
+			sqlCtx, cancel := sqlContext(ctx)
+			defer cancel()
+			owns, err := sqlClient.UserOwnsObjects(sqlCtx, dbUser.Spec.DatabaseName, dbUser.Spec.UserName)
 			if err != nil {
 				logger.Error(err, "failed to check if user owns objects")
 			} else if owns {
@@ -186,7 +202,9 @@ func (r *DatabaseUserReconciler) handleDeletion(ctx context.Context, dbUser *v1a
 					"User owns objects in the database, transfer ownership first")
 			}
 
-			if err := sqlClient.DropUser(ctx, dbUser.Spec.DatabaseName, dbUser.Spec.UserName); err != nil {
+			sqlCtx2, cancel2 := sqlContext(ctx)
+			defer cancel2()
+			if err := sqlClient.DropUser(sqlCtx2, dbUser.Spec.DatabaseName, dbUser.Spec.UserName); err != nil {
 				logger.Error(err, "failed to drop user")
 			} else {
 				r.Recorder.Event(dbUser, corev1.EventTypeNormal, "DatabaseUserDropped",
@@ -205,6 +223,8 @@ func (r *DatabaseUserReconciler) handleDeletion(ctx context.Context, dbUser *v1a
 func (r *DatabaseUserReconciler) setConditionAndReturn(ctx context.Context, dbUser *v1alpha1.DatabaseUser,
 	status metav1.ConditionStatus, reason, message string) (ctrl.Result, error) {
 
+	patch := client.MergeFrom(dbUser.DeepCopy())
+
 	meta.SetStatusCondition(&dbUser.Status.Conditions, metav1.Condition{
 		Type:               v1alpha1.ConditionReady,
 		Status:             status,
@@ -214,12 +234,12 @@ func (r *DatabaseUserReconciler) setConditionAndReturn(ctx context.Context, dbUs
 	})
 	dbUser.Status.ObservedGeneration = dbUser.Generation
 
-	if err := r.Status().Update(ctx, dbUser); err != nil {
+	if err := r.Status().Patch(ctx, dbUser, patch); err != nil {
 		return ctrl.Result{}, err
 	}
 
 	if status == metav1.ConditionTrue {
-		return ctrl.Result{RequeueAfter: requeueInterval}, nil
+		return ctrl.Result{RequeueAfter: requeueWithJitter(requeueInterval)}, nil
 	}
 	return ctrl.Result{}, nil
 }
@@ -228,5 +248,12 @@ func (r *DatabaseUserReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&v1alpha1.DatabaseUser{}).
 		WithEventFilter(predicate.GenerationChangedPredicate{}).
+		WithOptions(controller.Options{
+			MaxConcurrentReconciles: 5,
+			RateLimiter: workqueue.NewTypedMaxOfRateLimiter(
+				workqueue.NewTypedItemExponentialFailureRateLimiter[reconcile.Request](1*time.Second, 5*time.Minute),
+				&workqueue.TypedBucketRateLimiter[reconcile.Request]{Limiter: rate.NewLimiter(rate.Limit(10), 100)},
+			),
+		}).
 		Complete(r)
 }

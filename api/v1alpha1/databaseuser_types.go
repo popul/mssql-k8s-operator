@@ -37,6 +37,7 @@ type DatabaseUserStatus struct {
 
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
+// +kubebuilder:resource:shortName=msuser,categories=mssql
 // +kubebuilder:printcolumn:name="Database",type=string,JSONPath=`.spec.databaseName`
 // +kubebuilder:printcolumn:name="User",type=string,JSONPath=`.spec.userName`
 // +kubebuilder:printcolumn:name="Ready",type=string,JSONPath=`.status.conditions[?(@.type=="Ready")].status`

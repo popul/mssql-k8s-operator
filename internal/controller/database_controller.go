@@ -11,11 +11,15 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/tools/record"
+	"k8s.io/client-go/util/workqueue"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
+	"golang.org/x/time/rate"
 
 	v1alpha1 "github.com/popul/mssql-k8s-operator/api/v1alpha1"
 	opmetrics "github.com/popul/mssql-k8s-operator/internal/metrics"
@@ -85,15 +89,20 @@ func (r *DatabaseReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 	}
 	defer sqlClient.Close()
 
-	// 5. Observe current state
-	exists, err := sqlClient.DatabaseExists(ctx, db.Spec.DatabaseName)
+	// 5. Observe current state (with SQL timeout)
+	sqlCtx, cancel := sqlContext(ctx)
+	defer cancel()
+
+	exists, err := sqlClient.DatabaseExists(sqlCtx, db.Spec.DatabaseName)
 	if err != nil {
 		return ctrl.Result{}, fmt.Errorf("failed to check database existence: %w", err)
 	}
 
 	// 6. Compare and act
 	if !exists {
-		if err := sqlClient.CreateDatabase(ctx, db.Spec.DatabaseName, db.Spec.Collation); err != nil {
+		sqlCtx2, cancel2 := sqlContext(ctx)
+		defer cancel2()
+		if err := sqlClient.CreateDatabase(sqlCtx2, db.Spec.DatabaseName, db.Spec.Collation); err != nil {
 			return ctrl.Result{}, fmt.Errorf("failed to create database %s: %w", db.Spec.DatabaseName, err)
 		}
 		r.Recorder.Event(&db, corev1.EventTypeNormal, "DatabaseCreated",
@@ -103,12 +112,16 @@ func (r *DatabaseReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 
 	// Update owner if specified and different
 	if db.Spec.Owner != nil {
-		currentOwner, err := sqlClient.GetDatabaseOwner(ctx, db.Spec.DatabaseName)
+		sqlCtx3, cancel3 := sqlContext(ctx)
+		defer cancel3()
+		currentOwner, err := sqlClient.GetDatabaseOwner(sqlCtx3, db.Spec.DatabaseName)
 		if err != nil {
 			return ctrl.Result{}, fmt.Errorf("failed to get database owner: %w", err)
 		}
 		if currentOwner != *db.Spec.Owner {
-			if err := sqlClient.SetDatabaseOwner(ctx, db.Spec.DatabaseName, *db.Spec.Owner); err != nil {
+			sqlCtx4, cancel4 := sqlContext(ctx)
+			defer cancel4()
+			if err := sqlClient.SetDatabaseOwner(sqlCtx4, db.Spec.DatabaseName, *db.Spec.Owner); err != nil {
 				return ctrl.Result{}, fmt.Errorf("failed to set database owner: %w", err)
 			}
 			r.Recorder.Event(&db, corev1.EventTypeNormal, "DatabaseOwnerUpdated",
@@ -118,7 +131,9 @@ func (r *DatabaseReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 
 	// Check collation drift (immutable after creation)
 	if db.Spec.Collation != nil && exists {
-		currentCollation, err := sqlClient.GetDatabaseCollation(ctx, db.Spec.DatabaseName)
+		sqlCtx5, cancel5 := sqlContext(ctx)
+		defer cancel5()
+		currentCollation, err := sqlClient.GetDatabaseCollation(sqlCtx5, db.Spec.DatabaseName)
 		if err != nil {
 			return ctrl.Result{}, fmt.Errorf("failed to get database collation: %w", err)
 		}
@@ -162,7 +177,9 @@ func (r *DatabaseReconciler) handleDeletion(ctx context.Context, db *v1alpha1.Da
 				logger.Error(err, "failed to connect to SQL Server for cleanup, removing finalizer anyway")
 			} else {
 				defer sqlClient.Close()
-				if err := sqlClient.DropDatabase(ctx, db.Spec.DatabaseName); err != nil {
+				sqlCtx, cancel := sqlContext(ctx)
+				defer cancel()
+				if err := sqlClient.DropDatabase(sqlCtx, db.Spec.DatabaseName); err != nil {
 					logger.Error(err, "failed to drop database, removing finalizer anyway")
 				} else {
 					r.Recorder.Event(db, corev1.EventTypeNormal, "DatabaseDropped",
@@ -184,6 +201,8 @@ func (r *DatabaseReconciler) handleDeletion(ctx context.Context, db *v1alpha1.Da
 func (r *DatabaseReconciler) setConditionAndReturn(ctx context.Context, db *v1alpha1.Database,
 	status metav1.ConditionStatus, reason, message string) (ctrl.Result, error) {
 
+	patch := client.MergeFrom(db.DeepCopy())
+
 	meta.SetStatusCondition(&db.Status.Conditions, metav1.Condition{
 		Type:               v1alpha1.ConditionReady,
 		Status:             status,
@@ -193,12 +212,12 @@ func (r *DatabaseReconciler) setConditionAndReturn(ctx context.Context, db *v1al
 	})
 	db.Status.ObservedGeneration = db.Generation
 
-	if err := r.Status().Update(ctx, db); err != nil {
+	if err := r.Status().Patch(ctx, db, patch); err != nil {
 		return ctrl.Result{}, err
 	}
 
 	if status == metav1.ConditionTrue {
-		return ctrl.Result{RequeueAfter: requeueInterval}, nil
+		return ctrl.Result{RequeueAfter: requeueWithJitter(requeueInterval)}, nil
 	}
 	return ctrl.Result{}, nil
 }
@@ -207,5 +226,12 @@ func (r *DatabaseReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&v1alpha1.Database{}).
 		WithEventFilter(predicate.GenerationChangedPredicate{}).
+		WithOptions(controller.Options{
+			MaxConcurrentReconciles: 5,
+			RateLimiter: workqueue.NewTypedMaxOfRateLimiter(
+				workqueue.NewTypedItemExponentialFailureRateLimiter[reconcile.Request](1*time.Second, 5*time.Minute),
+				&workqueue.TypedBucketRateLimiter[reconcile.Request]{Limiter: rate.NewLimiter(rate.Limit(10), 100)},
+			),
+		}).
 		Complete(r)
 }

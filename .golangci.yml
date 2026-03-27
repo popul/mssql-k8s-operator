@@ -1,0 +1,50 @@
+run:
+  timeout: 5m
+
+linters:
+  enable:
+    - errcheck
+    - govet
+    - ineffassign
+    - staticcheck
+    - unused
+    - gosimple
+    - gocritic
+    - gofmt
+    - goimports
+    - misspell
+    - unconvert
+    - unparam
+    - prealloc
+    - nilerr
+    - errorlint
+    - bodyclose
+    - noctx
+
+linters-settings:
+  gocritic:
+    enabled-tags:
+      - diagnostic
+      - style
+      - performance
+  goimports:
+    local-prefixes: github.com/popul/mssql-k8s-operator
+  errorlint:
+    errorf: true
+    asserts: true
+    comparison: true
+
+issues:
+  exclude-rules:
+    # Test files can use dot imports and have longer functions
+    - path: _test\.go
+      linters:
+        - gocritic
+        - unparam
+    # Generated files
+    - path: zz_generated
+      linters:
+        - gocritic
+        - golint
+  max-issues-per-linter: 0
+  max-same-issues: 0

@@ -3,6 +3,8 @@ package controller
 import (
 	"context"
 	"fmt"
+	"math/rand"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -11,6 +13,11 @@ import (
 	sqlclient "github.com/popul/mssql-k8s-operator/internal/sql"
 
 	v1alpha1 "github.com/popul/mssql-k8s-operator/api/v1alpha1"
+)
+
+const (
+	// sqlOperationTimeout is the maximum time for a single SQL operation.
+	sqlOperationTimeout = 30 * time.Second
 )
 
 // getCredentialsFromSecret reads "username" and "password" keys from a Kubernetes Secret.
@@ -41,4 +48,15 @@ func connectToSQL(server v1alpha1.ServerReference, username, password string, fa
 		tlsEnabled = *server.TLS
 	}
 	return factory(server.Host, int(port), username, password, tlsEnabled)
+}
+
+// sqlContext returns a child context with a timeout suitable for SQL operations.
+func sqlContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(ctx, sqlOperationTimeout)
+}
+
+// requeueWithJitter returns a RequeueAfter duration with ±20% jitter to avoid thundering herd.
+func requeueWithJitter(base time.Duration) time.Duration {
+	jitter := time.Duration(rand.Int63n(int64(base / 5)))
+	return base + jitter
 }

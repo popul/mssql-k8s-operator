@@ -12,11 +12,15 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/record"
+	"k8s.io/client-go/util/workqueue"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
+	"golang.org/x/time/rate"
 
 	v1alpha1 "github.com/popul/mssql-k8s-operator/api/v1alpha1"
 	opmetrics "github.com/popul/mssql-k8s-operator/internal/metrics"
@@ -100,15 +104,19 @@ func (r *LoginReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 	}
 	defer sqlClient.Close()
 
-	// 6. Observe
-	exists, err := sqlClient.LoginExists(ctx, login.Spec.LoginName)
+	// 6. Observe (with SQL timeout)
+	sqlCtx, cancel := sqlContext(ctx)
+	defer cancel()
+	exists, err := sqlClient.LoginExists(sqlCtx, login.Spec.LoginName)
 	if err != nil {
 		return ctrl.Result{}, fmt.Errorf("failed to check login existence: %w", err)
 	}
 
 	// 7. Compare & Act
 	if !exists {
-		if err := sqlClient.CreateLogin(ctx, login.Spec.LoginName, string(loginPassword)); err != nil {
+		sqlCtx2, cancel2 := sqlContext(ctx)
+		defer cancel2()
+		if err := sqlClient.CreateLogin(sqlCtx2, login.Spec.LoginName, string(loginPassword)); err != nil {
 			return ctrl.Result{}, fmt.Errorf("failed to create login %s: %w", login.Spec.LoginName, err)
 		}
 		r.Recorder.Event(&login, corev1.EventTypeNormal, "LoginCreated",
@@ -117,7 +125,9 @@ func (r *LoginReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 	} else {
 		// Check password rotation
 		if pwSecret.ResourceVersion != login.Status.PasswordSecretResourceVersion {
-			if err := sqlClient.UpdateLoginPassword(ctx, login.Spec.LoginName, string(loginPassword)); err != nil {
+			sqlCtx3, cancel3 := sqlContext(ctx)
+			defer cancel3()
+			if err := sqlClient.UpdateLoginPassword(sqlCtx3, login.Spec.LoginName, string(loginPassword)); err != nil {
 				return ctrl.Result{}, fmt.Errorf("failed to update login password: %w", err)
 			}
 			r.Recorder.Event(&login, corev1.EventTypeNormal, "LoginPasswordRotated",
@@ -128,12 +138,16 @@ func (r *LoginReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 
 	// Default database
 	if login.Spec.DefaultDatabase != nil {
-		currentDB, err := sqlClient.GetLoginDefaultDatabase(ctx, login.Spec.LoginName)
+		sqlCtx4, cancel4 := sqlContext(ctx)
+		defer cancel4()
+		currentDB, err := sqlClient.GetLoginDefaultDatabase(sqlCtx4, login.Spec.LoginName)
 		if err != nil {
 			return ctrl.Result{}, fmt.Errorf("failed to get default database: %w", err)
 		}
 		if currentDB != *login.Spec.DefaultDatabase {
-			if err := sqlClient.SetLoginDefaultDatabase(ctx, login.Spec.LoginName, *login.Spec.DefaultDatabase); err != nil {
+			sqlCtx5, cancel5 := sqlContext(ctx)
+			defer cancel5()
+			if err := sqlClient.SetLoginDefaultDatabase(sqlCtx5, login.Spec.LoginName, *login.Spec.DefaultDatabase); err != nil {
 				return ctrl.Result{}, fmt.Errorf("failed to set default database: %w", err)
 			}
 		}
@@ -146,14 +160,29 @@ func (r *LoginReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 	}
 
 	// 8. Status
-	login.Status.PasswordSecretResourceVersion = pwSecret.ResourceVersion
 	opmetrics.ReconcileTotal.WithLabelValues("Login", "success").Inc()
-	return r.setConditionAndReturn(ctx, &login, metav1.ConditionTrue, v1alpha1.ReasonReady,
-		fmt.Sprintf("Login %s is ready", login.Spec.LoginName))
+
+	patch := client.MergeFrom(login.DeepCopy())
+	login.Status.PasswordSecretResourceVersion = pwSecret.ResourceVersion
+	meta.SetStatusCondition(&login.Status.Conditions, metav1.Condition{
+		Type:               v1alpha1.ConditionReady,
+		Status:             metav1.ConditionTrue,
+		Reason:             v1alpha1.ReasonReady,
+		Message:            fmt.Sprintf("Login %s is ready", login.Spec.LoginName),
+		ObservedGeneration: login.Generation,
+	})
+	login.Status.ObservedGeneration = login.Generation
+
+	if err := r.Status().Patch(ctx, &login, patch); err != nil {
+		return ctrl.Result{}, err
+	}
+	return ctrl.Result{RequeueAfter: requeueWithJitter(requeueInterval)}, nil
 }
 
 func (r *LoginReconciler) reconcileServerRoles(ctx context.Context, login *v1alpha1.Login, sqlClient sqlclient.SQLClient, loginName string, desiredRoles []string) error {
-	currentRoles, err := sqlClient.GetLoginServerRoles(ctx, loginName)
+	sqlCtx, cancel := sqlContext(ctx)
+	defer cancel()
+	currentRoles, err := sqlClient.GetLoginServerRoles(sqlCtx, loginName)
 	if err != nil {
 		return fmt.Errorf("failed to get server roles: %w", err)
 	}
@@ -161,10 +190,11 @@ func (r *LoginReconciler) reconcileServerRoles(ctx context.Context, login *v1alp
 	currentSet := toSet(currentRoles)
 	desiredSet := toSet(desiredRoles)
 
-	// Add missing roles
 	for role := range desiredSet {
 		if !currentSet[role] {
-			if err := sqlClient.AddLoginToServerRole(ctx, loginName, role); err != nil {
+			sqlCtx2, cancel2 := sqlContext(ctx)
+			defer cancel2()
+			if err := sqlClient.AddLoginToServerRole(sqlCtx2, loginName, role); err != nil {
 				return fmt.Errorf("failed to add role %s: %w", role, err)
 			}
 			r.Recorder.Event(login, corev1.EventTypeNormal, "ServerRoleAdded",
@@ -172,10 +202,11 @@ func (r *LoginReconciler) reconcileServerRoles(ctx context.Context, login *v1alp
 		}
 	}
 
-	// Remove extra roles
 	for role := range currentSet {
 		if !desiredSet[role] {
-			if err := sqlClient.RemoveLoginFromServerRole(ctx, loginName, role); err != nil {
+			sqlCtx3, cancel3 := sqlContext(ctx)
+			defer cancel3()
+			if err := sqlClient.RemoveLoginFromServerRole(sqlCtx3, loginName, role); err != nil {
 				return fmt.Errorf("failed to remove role %s: %w", role, err)
 			}
 			r.Recorder.Event(login, corev1.EventTypeNormal, "ServerRoleRemoved",
@@ -209,8 +240,9 @@ func (r *LoginReconciler) handleDeletion(ctx context.Context, login *v1alpha1.Lo
 			} else {
 				defer sqlClient.Close()
 
-				// Check if login has active users
-				hasUsers, err := sqlClient.LoginHasUsers(ctx, login.Spec.LoginName)
+				sqlCtx, cancel := sqlContext(ctx)
+				defer cancel()
+				hasUsers, err := sqlClient.LoginHasUsers(sqlCtx, login.Spec.LoginName)
 				if err != nil {
 					logger.Error(err, "failed to check if login has users")
 				} else if hasUsers {
@@ -220,7 +252,9 @@ func (r *LoginReconciler) handleDeletion(ctx context.Context, login *v1alpha1.Lo
 						"Login is still in use by database users, delete DatabaseUser CRs first")
 				}
 
-				if err := sqlClient.DropLogin(ctx, login.Spec.LoginName); err != nil {
+				sqlCtx2, cancel2 := sqlContext(ctx)
+				defer cancel2()
+				if err := sqlClient.DropLogin(sqlCtx2, login.Spec.LoginName); err != nil {
 					logger.Error(err, "failed to drop login")
 				} else {
 					r.Recorder.Event(login, corev1.EventTypeNormal, "LoginDropped",
@@ -240,6 +274,8 @@ func (r *LoginReconciler) handleDeletion(ctx context.Context, login *v1alpha1.Lo
 func (r *LoginReconciler) setConditionAndReturn(ctx context.Context, login *v1alpha1.Login,
 	status metav1.ConditionStatus, reason, message string) (ctrl.Result, error) {
 
+	patch := client.MergeFrom(login.DeepCopy())
+
 	meta.SetStatusCondition(&login.Status.Conditions, metav1.Condition{
 		Type:               v1alpha1.ConditionReady,
 		Status:             status,
@@ -249,12 +285,12 @@ func (r *LoginReconciler) setConditionAndReturn(ctx context.Context, login *v1al
 	})
 	login.Status.ObservedGeneration = login.Generation
 
-	if err := r.Status().Update(ctx, login); err != nil {
+	if err := r.Status().Patch(ctx, login, patch); err != nil {
 		return ctrl.Result{}, err
 	}
 
 	if status == metav1.ConditionTrue {
-		return ctrl.Result{RequeueAfter: requeueInterval}, nil
+		return ctrl.Result{RequeueAfter: requeueWithJitter(requeueInterval)}, nil
 	}
 	return ctrl.Result{}, nil
 }
@@ -263,6 +299,13 @@ func (r *LoginReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&v1alpha1.Login{}).
 		WithEventFilter(predicate.GenerationChangedPredicate{}).
+		WithOptions(controller.Options{
+			MaxConcurrentReconciles: 5,
+			RateLimiter: workqueue.NewTypedMaxOfRateLimiter(
+				workqueue.NewTypedItemExponentialFailureRateLimiter[reconcile.Request](1*time.Second, 5*time.Minute),
+				&workqueue.TypedBucketRateLimiter[reconcile.Request]{Limiter: rate.NewLimiter(rate.Limit(10), 100)},
+			),
+		}).
 		Complete(r)
 }
 
