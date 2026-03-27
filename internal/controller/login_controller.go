@@ -18,6 +18,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	v1alpha1 "github.com/popul/mssql-k8s-operator/api/v1alpha1"
+	opmetrics "github.com/popul/mssql-k8s-operator/internal/metrics"
 	sqlclient "github.com/popul/mssql-k8s-operator/internal/sql"
 )
 
@@ -35,6 +36,10 @@ type LoginReconciler struct {
 
 func (r *LoginReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	logger := log.FromContext(ctx)
+	start := time.Now()
+	defer func() {
+		opmetrics.ReconcileDuration.WithLabelValues("Login").Observe(time.Since(start).Seconds())
+	}()
 
 	// 1. Fetch
 	var login v1alpha1.Login
@@ -146,6 +151,7 @@ func (r *LoginReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 
 	// 8. Status
 	login.Status.PasswordSecretResourceVersion = pwSecret.ResourceVersion
+	opmetrics.ReconcileTotal.WithLabelValues("Login", "success").Inc()
 	return r.setConditionAndReturn(ctx, &login, metav1.ConditionTrue, v1alpha1.ReasonReady,
 		fmt.Sprintf("Login %s is ready", login.Spec.LoginName))
 }
@@ -290,6 +296,3 @@ func toSet(items []string) map[string]bool {
 	}
 	return s
 }
-
-// ensure unused import is used
-var _ = time.Second

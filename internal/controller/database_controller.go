@@ -18,6 +18,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	v1alpha1 "github.com/popul/mssql-k8s-operator/api/v1alpha1"
+	opmetrics "github.com/popul/mssql-k8s-operator/internal/metrics"
 	sqlclient "github.com/popul/mssql-k8s-operator/internal/sql"
 )
 
@@ -39,6 +40,10 @@ type DatabaseReconciler struct {
 
 func (r *DatabaseReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	logger := log.FromContext(ctx)
+	start := time.Now()
+	defer func() {
+		opmetrics.ReconcileDuration.WithLabelValues("Database").Observe(time.Since(start).Seconds())
+	}()
 
 	// 1. Fetch the Database CR
 	var db v1alpha1.Database
@@ -120,7 +125,25 @@ func (r *DatabaseReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 		}
 	}
 
+	// Check collation drift (immutable after creation)
+	if db.Spec.Collation != nil && exists {
+		currentCollation, err := sqlClient.GetDatabaseCollation(ctx, db.Spec.DatabaseName)
+		if err != nil {
+			return ctrl.Result{}, fmt.Errorf("failed to get database collation: %w", err)
+		}
+		if currentCollation != *db.Spec.Collation {
+			r.Recorder.Event(&db, corev1.EventTypeWarning, v1alpha1.ReasonCollationChangeNotSupported,
+				fmt.Sprintf("Database %s collation is %s but spec requires %s — collation is immutable",
+					db.Spec.DatabaseName, currentCollation, *db.Spec.Collation))
+			opmetrics.ReconcileErrors.WithLabelValues("Database", v1alpha1.ReasonCollationChangeNotSupported).Inc()
+			return r.setConditionAndReturn(ctx, &db, metav1.ConditionFalse, v1alpha1.ReasonCollationChangeNotSupported,
+				fmt.Sprintf("Collation mismatch: actual %s, desired %s — collation is immutable after creation",
+					currentCollation, *db.Spec.Collation))
+		}
+	}
+
 	// 7. Status: Ready=True
+	opmetrics.ReconcileTotal.WithLabelValues("Database", "success").Inc()
 	return r.setConditionAndReturn(ctx, &db, metav1.ConditionTrue, v1alpha1.ReasonReady,
 		fmt.Sprintf("Database %s is ready", db.Spec.DatabaseName))
 }

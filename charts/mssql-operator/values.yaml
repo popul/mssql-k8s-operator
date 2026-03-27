@@ -44,6 +44,10 @@ securityContext:
 metrics:
   enabled: true
   port: 8080
+  serviceMonitor:
+    enabled: false
+    interval: "30s"
+    labels: {}
 
 health:
   port: 8081

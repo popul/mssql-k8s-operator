@@ -178,6 +178,15 @@ func (m *MockClient) GetDatabaseCollation(_ context.Context, name string) (strin
 	return db.Collation, nil
 }
 
+// SetDatabaseCollation allows tests to simulate collation drift.
+func (m *MockClient) SetDatabaseCollation(_ context.Context, name, collation string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if db, ok := m.databases[name]; ok {
+		db.Collation = collation
+	}
+}
+
 // --- Login operations ---
 
 func (m *MockClient) LoginExists(_ context.Context, name string) (bool, error) {

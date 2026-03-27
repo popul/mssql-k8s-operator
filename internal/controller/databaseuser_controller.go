@@ -3,6 +3,7 @@ package controller
 import (
 	"context"
 	"fmt"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -17,6 +18,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	v1alpha1 "github.com/popul/mssql-k8s-operator/api/v1alpha1"
+	opmetrics "github.com/popul/mssql-k8s-operator/internal/metrics"
 	sqlclient "github.com/popul/mssql-k8s-operator/internal/sql"
 )
 
@@ -35,6 +37,10 @@ type DatabaseUserReconciler struct {
 
 func (r *DatabaseUserReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	logger := log.FromContext(ctx)
+	start := time.Now()
+	defer func() {
+		opmetrics.ReconcileDuration.WithLabelValues("DatabaseUser").Observe(time.Since(start).Seconds())
+	}()
 
 	// 1. Fetch
 	var dbUser v1alpha1.DatabaseUser
@@ -118,6 +124,7 @@ func (r *DatabaseUserReconciler) Reconcile(ctx context.Context, req ctrl.Request
 	}
 
 	// 8. Status
+	opmetrics.ReconcileTotal.WithLabelValues("DatabaseUser", "success").Inc()
 	return r.setConditionAndReturn(ctx, &dbUser, metav1.ConditionTrue, v1alpha1.ReasonReady,
 		fmt.Sprintf("User %s is ready in database %s", dbUser.Spec.UserName, dbUser.Spec.DatabaseName))
 }
