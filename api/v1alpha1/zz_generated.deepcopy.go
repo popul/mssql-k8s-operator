@@ -171,16 +171,7 @@ func (in *LoginList) DeepCopyObject() runtime.Object {
 
 func (in *LoginSpec) DeepCopyInto(out *LoginSpec) {
 	*out = *in
-	if in.Server.Port != nil {
-		in, out := &in.Server.Port, &out.Server.Port
-		*out = new(int32)
-		**out = **in
-	}
-	if in.Server.TLS != nil {
-		in, out := &in.Server.TLS, &out.Server.TLS
-		*out = new(bool)
-		**out = **in
-	}
+	in.Server.DeepCopyInto(&out.Server)
 	if in.DefaultDatabase != nil {
 		in, out := &in.DefaultDatabase, &out.DefaultDatabase
 		*out = new(string)
@@ -284,16 +275,7 @@ func (in *DatabaseUserList) DeepCopyObject() runtime.Object {
 
 func (in *DatabaseUserSpec) DeepCopyInto(out *DatabaseUserSpec) {
 	*out = *in
-	if in.Server.Port != nil {
-		in, out := &in.Server.Port, &out.Server.Port
-		*out = new(int32)
-		**out = **in
-	}
-	if in.Server.TLS != nil {
-		in, out := &in.Server.TLS, &out.Server.TLS
-		*out = new(bool)
-		**out = **in
-	}
+	in.Server.DeepCopyInto(&out.Server)
 	if in.DatabaseRoles != nil {
 		in, out := &in.DatabaseRoles, &out.DatabaseRoles
 		*out = make([]string, len(*in))

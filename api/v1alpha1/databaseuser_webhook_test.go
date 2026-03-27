@@ -80,6 +80,39 @@ func TestDatabaseUserWebhook_ValidateUpdate_DatabaseNameImmutable(t *testing.T) 
 	}
 }
 
+func TestDatabaseUserWebhook_ValidateCreate_MissingCredentialsSecretName(t *testing.T) {
+	user := validDatabaseUser()
+	user.Spec.Server.CredentialsSecret.Name = ""
+	_, err := user.ValidateCreate()
+	if err == nil {
+		t.Error("expected error for empty credentialsSecret name")
+	}
+}
+
+func TestDatabaseUserWebhook_ValidateUpdate_PortImmutable(t *testing.T) {
+	oldUser := validDatabaseUser()
+	newPort := int32(1434)
+	newUser := validDatabaseUser()
+	newUser.Spec.Server.Port = &newPort
+
+	_, err := newUser.ValidateUpdate(oldUser)
+	if err == nil {
+		t.Error("expected error when changing port")
+	}
+}
+
+func TestDatabaseUserWebhook_ValidateUpdate_TLSImmutable(t *testing.T) {
+	oldUser := validDatabaseUser()
+	tls := true
+	newUser := validDatabaseUser()
+	newUser.Spec.Server.TLS = &tls
+
+	_, err := newUser.ValidateUpdate(oldUser)
+	if err == nil {
+		t.Error("expected error when changing TLS")
+	}
+}
+
 func TestDatabaseUserWebhook_ValidateUpdate_RolesCanChange(t *testing.T) {
 	oldUser := validDatabaseUser()
 	oldUser.Spec.DatabaseRoles = []string{"db_datareader"}

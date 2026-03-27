@@ -34,6 +34,8 @@ type DatabaseUserReconciler struct {
 // +kubebuilder:rbac:groups=mssql.popul.io,resources=databaseusers/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=mssql.popul.io,resources=databaseusers/finalizers,verbs=update
 // +kubebuilder:rbac:groups=mssql.popul.io,resources=logins,verbs=get;list;watch
+// +kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch
+// +kubebuilder:rbac:groups="",resources=events,verbs=create;patch
 
 func (r *DatabaseUserReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	logger := log.FromContext(ctx)

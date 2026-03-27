@@ -10,9 +10,11 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
+	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 
 	v1alpha1 "github.com/popul/mssql-k8s-operator/api/v1alpha1"
 	"github.com/popul/mssql-k8s-operator/internal/controller"
+	_ "github.com/popul/mssql-k8s-operator/internal/metrics" // register Prometheus metrics
 	sqlclient "github.com/popul/mssql-k8s-operator/internal/sql"
 )
 
@@ -44,7 +46,10 @@ func main() {
 	setupLog := ctrl.Log.WithName("setup")
 
 	mgr, err := ctrl.NewManager(ctrl.GetConfigOrDie(), ctrl.Options{
-		Scheme:                 scheme,
+		Scheme: scheme,
+		Metrics: metricsserver.Options{
+			BindAddress: metricsAddr,
+		},
 		HealthProbeBindAddress: probeAddr,
 		LeaderElection:         enableLeaderElection,
 		LeaderElectionID:       "mssql-operator.popul.io",

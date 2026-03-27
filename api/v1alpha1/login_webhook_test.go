@@ -91,6 +91,39 @@ func TestLoginWebhook_ValidateUpdate_ServerImmutable(t *testing.T) {
 	}
 }
 
+func TestLoginWebhook_ValidateCreate_MissingCredentialsSecretName(t *testing.T) {
+	login := validLogin()
+	login.Spec.Server.CredentialsSecret.Name = ""
+	_, err := login.ValidateCreate()
+	if err == nil {
+		t.Error("expected error for empty credentialsSecret name")
+	}
+}
+
+func TestLoginWebhook_ValidateUpdate_PortImmutable(t *testing.T) {
+	oldLogin := validLogin()
+	newPort := int32(1434)
+	newLogin := validLogin()
+	newLogin.Spec.Server.Port = &newPort
+
+	_, err := newLogin.ValidateUpdate(oldLogin)
+	if err == nil {
+		t.Error("expected error when changing port")
+	}
+}
+
+func TestLoginWebhook_ValidateUpdate_TLSImmutable(t *testing.T) {
+	oldLogin := validLogin()
+	tls := true
+	newLogin := validLogin()
+	newLogin.Spec.Server.TLS = &tls
+
+	_, err := newLogin.ValidateUpdate(oldLogin)
+	if err == nil {
+		t.Error("expected error when changing TLS")
+	}
+}
+
 func TestLoginWebhook_ValidateUpdate_RolesCanChange(t *testing.T) {
 	oldLogin := validLogin()
 	oldLogin.Spec.ServerRoles = []string{"dbcreator"}

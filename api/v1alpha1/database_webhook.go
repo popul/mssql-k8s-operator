@@ -54,6 +54,18 @@ func (r *Database) ValidateUpdate(old runtime.Object) ([]string, error) {
 			"server host is immutable"))
 	}
 
+	if !int32PtrEqual(r.Spec.Server.Port, oldDB.Spec.Server.Port) {
+		allErrs = append(allErrs, field.Forbidden(
+			field.NewPath("spec", "server", "port"),
+			"server port is immutable"))
+	}
+
+	if !boolPtrEqual(r.Spec.Server.TLS, oldDB.Spec.Server.TLS) {
+		allErrs = append(allErrs, field.Forbidden(
+			field.NewPath("spec", "server", "tls"),
+			"server tls is immutable"))
+	}
+
 	if len(allErrs) > 0 {
 		return nil, allErrs.ToAggregate()
 	}
@@ -80,6 +92,12 @@ func (r *Database) validateDatabase() error {
 			"server host is required"))
 	}
 
+	if r.Spec.Server.CredentialsSecret.Name == "" {
+		allErrs = append(allErrs, field.Required(
+			field.NewPath("spec", "server", "credentialsSecret", "name"),
+			"credentialsSecret name is required"))
+	}
+
 	if len(allErrs) > 0 {
 		return allErrs.ToAggregate()
 	}
@@ -87,6 +105,26 @@ func (r *Database) validateDatabase() error {
 }
 
 func stringPtrEqual(a, b *string) bool {
+	if a == nil && b == nil {
+		return true
+	}
+	if a == nil || b == nil {
+		return false
+	}
+	return *a == *b
+}
+
+func int32PtrEqual(a, b *int32) bool {
+	if a == nil && b == nil {
+		return true
+	}
+	if a == nil || b == nil {
+		return false
+	}
+	return *a == *b
+}
+
+func boolPtrEqual(a, b *bool) bool {
 	if a == nil && b == nil {
 		return true
 	}

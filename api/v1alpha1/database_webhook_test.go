@@ -149,6 +149,39 @@ func TestDatabaseWebhook_ValidateUpdate_ServerImmutable(t *testing.T) {
 	}
 }
 
+func TestDatabaseWebhook_ValidateCreate_MissingCredentialsSecretName(t *testing.T) {
+	db := validDatabase()
+	db.Spec.Server.CredentialsSecret.Name = ""
+	_, err := db.ValidateCreate()
+	if err == nil {
+		t.Error("expected error for empty credentialsSecret name")
+	}
+}
+
+func TestDatabaseWebhook_ValidateUpdate_PortImmutable(t *testing.T) {
+	oldDB := validDatabase()
+	newPort := int32(1434)
+	newDB := validDatabase()
+	newDB.Spec.Server.Port = &newPort
+
+	_, err := newDB.ValidateUpdate(oldDB)
+	if err == nil {
+		t.Error("expected error when changing port")
+	}
+}
+
+func TestDatabaseWebhook_ValidateUpdate_TLSImmutable(t *testing.T) {
+	oldDB := validDatabase()
+	tls := true
+	newDB := validDatabase()
+	newDB.Spec.Server.TLS = &tls
+
+	_, err := newDB.ValidateUpdate(oldDB)
+	if err == nil {
+		t.Error("expected error when changing TLS")
+	}
+}
+
 func TestDatabaseWebhook_ValidateDelete_Always(t *testing.T) {
 	db := validDatabase()
 	_, err := db.ValidateDelete()

@@ -33,6 +33,8 @@ type LoginReconciler struct {
 // +kubebuilder:rbac:groups=mssql.popul.io,resources=logins,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=mssql.popul.io,resources=logins/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=mssql.popul.io,resources=logins/finalizers,verbs=update
+// +kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch
+// +kubebuilder:rbac:groups="",resources=events,verbs=create;patch
 
 func (r *LoginReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	logger := log.FromContext(ctx)
@@ -79,7 +81,8 @@ func (r *LoginReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 			return r.setConditionAndReturn(ctx, &login, metav1.ConditionFalse, v1alpha1.ReasonSecretNotFound,
 				fmt.Sprintf("Password secret %q not found", login.Spec.PasswordSecret.Name))
 		}
-		return ctrl.Result{}, err
+		return r.setConditionAndReturn(ctx, &login, metav1.ConditionFalse, v1alpha1.ReasonConnectionFailed,
+			fmt.Sprintf("Failed to fetch password secret: %v", err))
 	}
 	loginPassword, ok := pwSecret.Data["password"]
 	if !ok {

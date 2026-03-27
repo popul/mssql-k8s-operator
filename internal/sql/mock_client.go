@@ -50,6 +50,8 @@ func NewMockClient() *MockClient {
 	}
 }
 
+// track must be called while m.mu is held (Lock or RLock promoted to Lock).
+// Since all public methods already hold the lock, this is safe.
 func (m *MockClient) track(method string) {
 	m.calls[method]++
 }
@@ -136,8 +138,8 @@ func (m *MockClient) DropDatabase(_ context.Context, name string) error {
 }
 
 func (m *MockClient) GetDatabaseOwner(_ context.Context, name string) (string, error) {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	m.track("GetDatabaseOwner")
 	if err := m.checkConnect(); err != nil {
 		return "", err
@@ -165,8 +167,8 @@ func (m *MockClient) SetDatabaseOwner(_ context.Context, dbName, owner string) e
 }
 
 func (m *MockClient) GetDatabaseCollation(_ context.Context, name string) (string, error) {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	m.track("GetDatabaseCollation")
 	if err := m.checkConnect(); err != nil {
 		return "", err
@@ -238,8 +240,8 @@ func (m *MockClient) UpdateLoginPassword(_ context.Context, name, password strin
 }
 
 func (m *MockClient) GetLoginDefaultDatabase(_ context.Context, name string) (string, error) {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	m.track("GetLoginDefaultDatabase")
 	if err := m.checkConnect(); err != nil {
 		return "", err
@@ -267,8 +269,8 @@ func (m *MockClient) SetLoginDefaultDatabase(_ context.Context, name, dbName str
 }
 
 func (m *MockClient) GetLoginServerRoles(_ context.Context, name string) ([]string, error) {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	m.track("GetLoginServerRoles")
 	if err := m.checkConnect(); err != nil {
 		return nil, err
@@ -363,8 +365,8 @@ func (m *MockClient) DropUser(_ context.Context, dbName, userName string) error 
 }
 
 func (m *MockClient) GetUserDatabaseRoles(_ context.Context, dbName, userName string) ([]string, error) {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	m.track("GetUserDatabaseRoles")
 	if err := m.checkConnect(); err != nil {
 		return nil, err
@@ -420,8 +422,8 @@ func (m *MockClient) RemoveUserFromDatabaseRole(_ context.Context, dbName, userN
 }
 
 func (m *MockClient) UserOwnsObjects(_ context.Context, dbName, userName string) (bool, error) {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	m.track("UserOwnsObjects")
 	if err := m.checkConnect(); err != nil {
 		return false, err
@@ -443,8 +445,8 @@ func (m *MockClient) GetMockUser(dbName, userName string) *MockUser {
 // --- Cross-reference checks ---
 
 func (m *MockClient) LoginHasUsers(_ context.Context, loginName string) (bool, error) {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	m.track("LoginHasUsers")
 	if err := m.checkConnect(); err != nil {
 		return false, err

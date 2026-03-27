@@ -47,6 +47,18 @@ func (r *Login) ValidateUpdate(old runtime.Object) ([]string, error) {
 			"server host is immutable"))
 	}
 
+	if !int32PtrEqual(r.Spec.Server.Port, oldLogin.Spec.Server.Port) {
+		allErrs = append(allErrs, field.Forbidden(
+			field.NewPath("spec", "server", "port"),
+			"server port is immutable"))
+	}
+
+	if !boolPtrEqual(r.Spec.Server.TLS, oldLogin.Spec.Server.TLS) {
+		allErrs = append(allErrs, field.Forbidden(
+			field.NewPath("spec", "server", "tls"),
+			"server tls is immutable"))
+	}
+
 	if len(allErrs) > 0 {
 		return nil, allErrs.ToAggregate()
 	}
@@ -71,6 +83,12 @@ func (r *Login) validateLogin() error {
 		allErrs = append(allErrs, field.Required(
 			field.NewPath("spec", "server", "host"),
 			"server host is required"))
+	}
+
+	if r.Spec.Server.CredentialsSecret.Name == "" {
+		allErrs = append(allErrs, field.Required(
+			field.NewPath("spec", "server", "credentialsSecret", "name"),
+			"credentialsSecret name is required"))
 	}
 
 	if r.Spec.PasswordSecret.Name == "" {

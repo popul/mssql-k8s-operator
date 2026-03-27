@@ -351,5 +351,8 @@ func (c *MSSQLClient) execInDatabase(ctx context.Context, dbName, query string) 
 	}
 
 	_, err = conn.ExecContext(ctx, query)
-	return err
+	if err != nil {
+		return fmt.Errorf("failed to execute in database %s: %w", dbName, err)
+	}
+	return nil
 }
