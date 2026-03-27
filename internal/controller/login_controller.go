@@ -248,8 +248,17 @@ func (r *LoginReconciler) handleDeletion(ctx context.Context, login *v1alpha1.Lo
 				} else if hasUsers {
 					r.Recorder.Event(login, corev1.EventTypeWarning, v1alpha1.ReasonLoginInUse,
 						fmt.Sprintf("Login %s is still in use by database users", login.Spec.LoginName))
-					return r.setConditionAndReturn(ctx, login, metav1.ConditionFalse, v1alpha1.ReasonLoginInUse,
-						"Login is still in use by database users, delete DatabaseUser CRs first")
+					// Set condition but requeue — don't block deletion indefinitely
+					patch := client.MergeFrom(login.DeepCopy())
+					meta.SetStatusCondition(&login.Status.Conditions, metav1.Condition{
+						Type:               v1alpha1.ConditionReady,
+						Status:             metav1.ConditionFalse,
+						Reason:             v1alpha1.ReasonLoginInUse,
+						Message:            "Login is still in use by database users, delete DatabaseUser CRs first",
+						ObservedGeneration: login.Generation,
+					})
+					_ = r.Status().Patch(ctx, login, patch)
+					return ctrl.Result{RequeueAfter: requeueWithJitter(requeueInterval)}, nil
 				}
 
 				sqlCtx2, cancel2 := sqlContext(ctx)

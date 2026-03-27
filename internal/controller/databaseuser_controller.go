@@ -198,8 +198,17 @@ func (r *DatabaseUserReconciler) handleDeletion(ctx context.Context, dbUser *v1a
 			} else if owns {
 				r.Recorder.Event(dbUser, corev1.EventTypeWarning, v1alpha1.ReasonUserOwnsObjects,
 					fmt.Sprintf("User %s owns objects in database %s", dbUser.Spec.UserName, dbUser.Spec.DatabaseName))
-				return r.setConditionAndReturn(ctx, dbUser, metav1.ConditionFalse, v1alpha1.ReasonUserOwnsObjects,
-					"User owns objects in the database, transfer ownership first")
+				// Set condition but requeue — don't block deletion indefinitely
+				patch := client.MergeFrom(dbUser.DeepCopy())
+				meta.SetStatusCondition(&dbUser.Status.Conditions, metav1.Condition{
+					Type:               v1alpha1.ConditionReady,
+					Status:             metav1.ConditionFalse,
+					Reason:             v1alpha1.ReasonUserOwnsObjects,
+					Message:            "User owns objects in the database, transfer ownership first",
+					ObservedGeneration: dbUser.Generation,
+				})
+				_ = r.Status().Patch(ctx, dbUser, patch)
+				return ctrl.Result{RequeueAfter: requeueWithJitter(requeueInterval)}, nil
 			}
 
 			sqlCtx2, cancel2 := sqlContext(ctx)
