@@ -217,14 +217,68 @@
 - [ ] **AC-9.1.1** — La couverture de code sur les contrôleurs est ≥ 80%.
 - [ ] **AC-9.1.2** — Chaque contrôleur a des tests unitaires couvrant : création, mise à jour, suppression, erreurs de connexion, Secret manquant, idempotence.
 
-### 9.2 Tests d'intégration [P1]
+### 9.2 Tests d'intégration — Client SQL (testcontainers) [P1]
 
-- [ ] **AC-9.2.1** — Les tests envtest valident le cycle de vie complet de chaque CR (create → update → delete) avec l'API Server réel.
-- [ ] **AC-9.2.2** — Les tests avec testcontainers valident les requêtes SQL réelles contre une instance SQL Server 2022.
+- [ ] **AC-9.2.1** — Les tests avec testcontainers démarrent une instance `mcr.microsoft.com/mssql/server:2022-latest` et valident toutes les méthodes du `SQLClient` contre SQL Server réel.
+- [ ] **AC-9.2.2** — **Given** un appel à `CreateDatabase("testdb", "SQL_Latin1_General_CP1_CI_AS")`, **When** on appelle `DatabaseExists("testdb")`, **Then** le retour est `true` et `GetDatabaseCollation("testdb")` retourne la bonne collation.
+- [ ] **AC-9.2.3** — **Given** un appel à `CreateDatabase("testdb", nil)`, **Then** la base est créée avec la collation par défaut de l'instance.
+- [ ] **AC-9.2.4** — **Given** une base existante, **When** on appelle `SetDatabaseOwner("testdb", "testlogin")`, **Then** `GetDatabaseOwner("testdb")` retourne `testlogin`.
+- [ ] **AC-9.2.5** — **Given** un appel à `DropDatabase("testdb")`, **Then** `DatabaseExists("testdb")` retourne `false`.
+- [ ] **AC-9.2.6** — **Given** un appel à `DropDatabase("nonexistent")`, **Then** aucune erreur n'est retournée (idempotent).
+- [ ] **AC-9.2.7** — **Given** un appel à `CreateLogin("testlogin", "P@ssw0rd123")`, **When** on appelle `LoginExists("testlogin")`, **Then** le retour est `true`.
+- [ ] **AC-9.2.8** — **Given** un login existant, **When** on appelle `UpdateLoginPassword("testlogin", "NewP@ss456")`, **Then** la connexion avec le nouveau mot de passe réussit.
+- [ ] **AC-9.2.9** — **Given** un login existant, **When** on appelle `AddLoginToServerRole("testlogin", "dbcreator")` puis `GetLoginServerRoles("testlogin")`, **Then** la liste contient `dbcreator`.
+- [ ] **AC-9.2.10** — **Given** un login avec le rôle `dbcreator`, **When** on appelle `RemoveLoginFromServerRole("testlogin", "dbcreator")`, **Then** `GetLoginServerRoles("testlogin")` ne contient plus `dbcreator`.
+- [ ] **AC-9.2.11** — **Given** un appel à `DropLogin("nonexistent")`, **Then** aucune erreur (idempotent).
+- [ ] **AC-9.2.12** — **Given** une base et un login existants, **When** on appelle `CreateUser("testdb", "testuser", "testlogin")`, **Then** `UserExists("testdb", "testuser")` retourne `true`.
+- [ ] **AC-9.2.13** — **Given** un utilisateur existant, **When** on appelle `AddUserToDatabaseRole("testdb", "testuser", "db_datareader")`, **Then** `GetUserDatabaseRoles("testdb", "testuser")` contient `db_datareader`.
+- [ ] **AC-9.2.14** — **Given** un utilisateur sans objets, **When** on appelle `DropUser("testdb", "testuser")`, **Then** `UserExists("testdb", "testuser")` retourne `false`.
+- [ ] **AC-9.2.15** — **Given** un utilisateur qui possède un schéma, **When** on appelle `UserOwnsObjects("testdb", "testuser")`, **Then** le retour est `true`.
+- [ ] **AC-9.2.16** — **Given** un login associé à un user dans une base, **When** on appelle `LoginHasUsers("testlogin")`, **Then** le retour est `true`.
+- [ ] **AC-9.2.17** — **Given** un identifier avec des caractères spéciaux (`test]db`, `test[db`, `test"db`), **When** on crée une base avec ce nom, **Then** la base est créée sans injection SQL et le nom est correctement échappé.
+- [ ] **AC-9.2.18** — **Given** le container SQL Server arrêté, **When** on appelle n'importe quelle méthode du client, **Then** une erreur de connexion est retournée (pas de panic ni hang).
 
-### 9.3 Tests E2E [P1]
+### 9.3 Tests d'intégration — Contrôleurs (envtest) [P1]
 
-- [ ] **AC-9.3.1** — Un test E2E déploie l'opérateur via Helm dans un cluster kind, crée une Database + Login + DatabaseUser, vérifie l'état sur SQL Server, puis supprime tout et vérifie le cleanup.
+- [ ] **AC-9.3.1** — L'environnement envtest démarre un API Server + etcd, installe les CRDs, et enregistre les 3 contrôleurs avec un mock SQL client.
+
+#### Database (envtest)
+
+- [ ] **AC-9.3.2** — **Given** un Secret SA et un mock SQL configuré, **When** je crée une CR `Database` dans envtest, **Then** après réconciliation le status contient `Ready=True` et `ObservedGeneration == metadata.generation`.
+- [ ] **AC-9.3.3** — **Given** une CR `Database` déjà `Ready`, **When** je modifie `spec.owner`, **Then** la génération incrémente, le contrôleur réconcilie, et le mock reçoit un appel `SetDatabaseOwner`.
+- [ ] **AC-9.3.4** — **Given** une CR `Database` avec finalizer, **When** je la supprime (`kubectl delete`), **Then** le mock reçoit un appel `DropDatabase` (si deletionPolicy=Delete) et la CR disparaît de l'API Server.
+- [ ] **AC-9.3.5** — **Given** un mock SQL qui retourne une erreur de connexion, **When** le contrôleur réconcilie, **Then** le status contient `Ready=False, Reason=ConnectionFailed` et un event `Warning` est enregistré.
+- [ ] **AC-9.3.6** — **Given** le Secret `credentialsSecret` qui n'existe pas, **When** le contrôleur réconcilie, **Then** le status contient `Ready=False, Reason=SecretNotFound`.
+
+#### Login (envtest)
+
+- [ ] **AC-9.3.7** — **Given** un Secret SA et un Secret password, **When** je crée une CR `Login`, **Then** le mock reçoit `CreateLogin` et le status passe à `Ready=True`.
+- [ ] **AC-9.3.8** — **Given** une CR `Login` `Ready`, **When** je modifie le contenu du Secret password (nouvelle ResourceVersion), **Then** le contrôleur détecte le changement et appelle `UpdateLoginPassword` sur le mock.
+- [ ] **AC-9.3.9** — **Given** une CR `Login` avec `serverRoles: [dbcreator]`, **When** je modifie pour `[dbcreator, securityadmin]`, **Then** le mock reçoit `AddLoginToServerRole("securityadmin")` sans toucher `dbcreator`.
+- [ ] **AC-9.3.10** — **Given** un mock qui retourne `LoginHasUsers=true`, **When** je supprime la CR `Login` avec `deletionPolicy: Delete`, **Then** le status contient `Ready=False, Reason=LoginInUse` et le finalizer n'est PAS retiré.
+
+#### DatabaseUser (envtest)
+
+- [ ] **AC-9.3.11** — **Given** une CR `Login` existante en `Ready`, **When** je crée une CR `DatabaseUser` référençant ce Login, **Then** le mock reçoit `CreateUser` et le status passe à `Ready=True`.
+- [ ] **AC-9.3.12** — **Given** une CR `DatabaseUser` avec `loginRef` vers un Login inexistant, **When** le contrôleur réconcilie, **Then** le status contient `Ready=False, Reason=LoginRefNotFound`.
+- [ ] **AC-9.3.13** — **Given** une CR `DatabaseUser` en `LoginRefNotFound`, **When** je crée la CR `Login` référencée, **Then** le contrôleur reconcilie le DatabaseUser et le status passe à `Ready=True`.
+- [ ] **AC-9.3.14** — **Given** un mock qui retourne `UserOwnsObjects=true`, **When** je supprime la CR `DatabaseUser`, **Then** le status contient `Ready=False, Reason=UserOwnsObjects` et le finalizer n'est PAS retiré.
+
+#### Transverse (envtest)
+
+- [ ] **AC-9.3.15** — **Given** une CR déjà `Ready` sans changement, **When** le contrôleur réconcilie une seconde fois, **Then** le mock ne reçoit aucun appel de mutation (idempotence).
+- [ ] **AC-9.3.16** — Les events Kubernetes (`Normal` et `Warning`) sont visibles via `client.List(&corev1.EventList{})` après chaque action significative.
+
+### 9.4 Tests d'intégration — Full stack (testcontainers + envtest) [P1]
+
+- [ ] **AC-9.4.1** — Un test combine envtest (API Server réel) + testcontainers (SQL Server réel) pour valider le cycle complet : créer une CR Database → vérifier la base sur SQL Server → supprimer la CR → vérifier que la base est supprimée.
+- [ ] **AC-9.4.2** — Même test full-stack pour Login : créer → vérifier le login sur SQL Server → rotation du mot de passe → vérifier la connexion avec le nouveau mot de passe → supprimer.
+- [ ] **AC-9.4.3** — Même test full-stack pour DatabaseUser : créer Database + Login + DatabaseUser → vérifier l'utilisateur et les rôles sur SQL Server → modifier les rôles → vérifier → supprimer dans l'ordre inverse.
+- [ ] **AC-9.4.4** — **Given** le container SQL Server qui est arrêté puis redémarré, **When** le contrôleur réconcilie, **Then** toutes les CRs convergent vers `Ready=True` après le redémarrage.
+
+### 9.5 Tests E2E [P1]
+
+- [ ] **AC-9.5.1** — Un test E2E déploie l'opérateur via Helm dans un cluster kind, crée une Database + Login + DatabaseUser, vérifie l'état sur SQL Server, puis supprime tout et vérifie le cleanup.
 
 ---
 
@@ -240,5 +294,9 @@
 | Observabilité | 8 |
 | Haute disponibilité | 4 |
 | Résilience | 3 |
-| Tests | 4 |
-| **Total** | **78** |
+| Tests — Couverture | 2 |
+| Tests — Intégration SQL (testcontainers) | 18 |
+| Tests — Intégration Contrôleurs (envtest) | 16 |
+| Tests — Full stack (envtest + testcontainers) | 4 |
+| Tests — E2E | 1 |
+| **Total** | **115** |

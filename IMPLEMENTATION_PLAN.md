@@ -409,7 +409,404 @@ AC-4.1.1, AC-4.1.2, AC-4.2.1, AC-4.2.2, AC-4.3.1, AC-4.3.2, AC-4.4.1, AC-4.4.2
 
 ---
 
-## Étape 7 — Observabilité
+## Étape 7 — Tests d'intégration
+
+### Objectif
+
+Valider chaque couche avec des dépendances réelles : le client SQL contre un vrai SQL Server (testcontainers), les contrôleurs contre un vrai API Server (envtest), et les deux ensemble (full-stack).
+
+### 7A — Tests d'intégration du client SQL (testcontainers)
+
+#### Fichiers créés
+
+- `internal/sql/testhelper_test.go` — setup/teardown du container SQL Server
+- `internal/sql/client_integration_test.go` — tests de toutes les méthodes
+
+#### Setup
+
+```go
+// testhelper_test.go
+// Build tag: //go:build integration
+
+func setupSQLServer(t *testing.T) (host string, port int, cleanup func()) {
+    ctx := context.Background()
+    req := testcontainers.ContainerRequest{
+        Image:        "mcr.microsoft.com/mssql/server:2022-latest",
+        ExposedPorts: []string{"1433/tcp"},
+        Env: map[string]string{
+            "ACCEPT_EULA":     "Y",
+            "MSSQL_SA_PASSWORD": "T3stP@ssw0rd!",
+        },
+        WaitingFor: wait.ForSQL("1433/tcp", "sqlserver",
+            func(host string, port nat.Port) string {
+                return fmt.Sprintf("sqlserver://sa:T3stP@ssw0rd!@%s:%s", host, port.Port())
+            }).WithStartupTimeout(60 * time.Second),
+    }
+    container, _ := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
+        ContainerRequest: req, Started: true,
+    })
+    // ... retourner host, port mappé, cleanup
+}
+```
+
+#### Cas de test
+
+```
+TestDatabaseLifecycle
+├── CreateDatabase avec collation
+├── CreateDatabase sans collation (défaut)
+├── DatabaseExists → true
+├── GetDatabaseCollation → valeur attendue
+├── SetDatabaseOwner + GetDatabaseOwner
+├── DropDatabase → DatabaseExists → false
+└── DropDatabase idempotent (re-drop)
+
+TestLoginLifecycle
+├── CreateLogin
+├── LoginExists → true
+├── UpdateLoginPassword → connexion avec nouveau mdp OK
+├── SetLoginDefaultDatabase + GetLoginDefaultDatabase
+├── AddLoginToServerRole + GetLoginServerRoles
+├── RemoveLoginFromServerRole
+├── LoginHasUsers → false (pas d'user)
+├── DropLogin → LoginExists → false
+└── DropLogin idempotent
+
+TestDatabaseUserLifecycle
+├── Setup : CreateDatabase + CreateLogin
+├── CreateUser
+├── UserExists → true
+├── AddUserToDatabaseRole + GetUserDatabaseRoles
+├── RemoveUserFromDatabaseRole
+├── UserOwnsObjects → false
+├── DropUser → UserExists → false
+└── Cleanup : DropLogin + DropDatabase
+
+TestUserOwnsObjects
+├── CreateDatabase + CreateLogin + CreateUser
+├── CREATE SCHEMA owned by user (T-SQL direct)
+├── UserOwnsObjects → true
+└── Cleanup
+
+TestLoginHasUsers
+├── CreateDatabase + CreateLogin + CreateUser
+├── LoginHasUsers → true
+└── DropUser → LoginHasUsers → false
+
+TestQuoteNameInjection
+├── CreateDatabase("test]db") → succès, nom correctement échappé
+├── CreateDatabase("test[db") → succès
+├── CreateDatabase("'; DROP DATABASE master; --") → succès, pas d'injection
+└── Cleanup
+
+TestConnectionFailure
+├── Arrêter le container
+├── Appeler Ping() → erreur retournée, pas de panic/hang
+└── Timeout < 10s
+```
+
+#### Commande
+
+```bash
+go test -tags=integration -v -count=1 ./internal/sql/...
+```
+
+### 7B — Tests d'intégration des contrôleurs (envtest)
+
+#### Fichiers créés
+
+- `internal/controller/suite_test.go` — setup envtest (déjà scaffoldé, à enrichir)
+- `internal/controller/database_controller_integration_test.go`
+- `internal/controller/login_controller_integration_test.go`
+- `internal/controller/databaseuser_controller_integration_test.go`
+
+#### Setup
+
+```go
+// suite_test.go
+var (
+    k8sClient  client.Client
+    testEnv    *envtest.Environment
+    ctx        context.Context
+    cancel     context.CancelFunc
+    mockSQL    *sql.MockSQLClient
+)
+
+func TestControllers(t *testing.T) {
+    RegisterFailHandler(Fail)
+    RunSpecs(t, "Controller Suite")
+}
+
+var _ = BeforeSuite(func() {
+    testEnv = &envtest.Environment{
+        CRDDirectoryPaths: []string{
+            filepath.Join("..", "..", "config", "crd", "bases"),
+        },
+    }
+    cfg, _ := testEnv.Start()
+
+    // Créer le mock SQL client
+    mockSQL = sql.NewMockSQLClient()
+
+    // Enregistrer le manager + les 3 contrôleurs avec le mock
+    mgr, _ := ctrl.NewManager(cfg, ctrl.Options{Scheme: scheme})
+    (&DatabaseReconciler{
+        Client:       mgr.GetClient(),
+        Scheme:       mgr.GetScheme(),
+        SQLFactory:   func(...) (sql.SQLClient, error) { return mockSQL, nil },
+        Recorder:     mgr.GetEventRecorderFor("database-controller"),
+    }).SetupWithManager(mgr)
+    // ... idem Login, DatabaseUser
+
+    go mgr.Start(ctx)
+})
+```
+
+#### Cas de test — Database
+
+```
+Describe("Database Controller")
+├── Context("Création")
+│   ├── It("crée la base et passe en Ready=True")
+│   │   → Créer Secret SA + CR Database
+│   │   → Eventually: status.conditions[Ready]=True
+│   │   → Expect: mockSQL.CreateDatabaseCalled == true
+│   │
+│   └── It("adopte une base existante sans erreur")
+│       → Configurer mockSQL.DatabaseExists = true
+│       → Créer CR Database
+│       → Eventually: Ready=True, CreateDatabase NOT called
+│
+├── Context("Mise à jour")
+│   ├── It("met à jour le owner")
+│   │   → Modifier spec.owner
+│   │   → Eventually: mockSQL.SetDatabaseOwnerCalled == true
+│   │
+│   └── It("rejette un changement de databaseName")
+│       → Modifier spec.databaseName
+│       → Eventually: Ready=False, Reason=ImmutableFieldChanged
+│
+├── Context("Suppression")
+│   ├── It("supprime la base avec deletionPolicy=Delete")
+│   │   → Delete CR
+│   │   → Eventually: mockSQL.DropDatabaseCalled == true
+│   │   → Eventually: CR n'existe plus dans l'API Server
+│   │
+│   ├── It("conserve la base avec deletionPolicy=Retain")
+│   │   → Delete CR
+│   │   → Eventually: CR n'existe plus
+│   │   → Expect: mockSQL.DropDatabaseCalled == false
+│   │
+│   └── It("supprime proprement même si la base n'existe plus")
+│       → Configurer mockSQL.DatabaseExists = false
+│       → Delete CR → pas d'erreur
+│
+├── Context("Erreurs")
+│   ├── It("Secret manquant → SecretNotFound")
+│   ├── It("Connexion échouée → ConnectionFailed + retry")
+│   └── It("Émet un event Warning sur erreur")
+│
+└── Context("Idempotence")
+    └── It("2 réconciliations identiques = même résultat, 0 mutation")
+```
+
+#### Cas de test — Login
+
+```
+Describe("Login Controller")
+├── Context("Création + rôles")
+│   ├── It("crée le login avec les server roles")
+│   └── It("adopte un login existant et corrige les rôles")
+│
+├── Context("Rotation du mot de passe")
+│   ├── It("détecte un changement de Secret et appelle UpdateLoginPassword")
+│   └── It("émet un event LoginPasswordRotated")
+│
+├── Context("Gestion des rôles")
+│   ├── It("ajoute un rôle sans toucher aux existants")
+│   └── It("retire un rôle supprimé du spec")
+│
+├── Context("Suppression")
+│   ├── It("bloque si LoginHasUsers=true → LoginInUse")
+│   └── It("supprime si pas d'users dépendants")
+│
+└── Context("Idempotence")
+    └── It("2 réconciliations identiques = 0 mutation")
+```
+
+#### Cas de test — DatabaseUser
+
+```
+Describe("DatabaseUser Controller")
+├── Context("Référence croisée")
+│   ├── It("LoginRefNotFound si la CR Login n'existe pas")
+│   ├── It("Passe en Ready quand la CR Login est créée ensuite")
+│   └── It("Crée l'utilisateur avec les rôles spécifiés")
+│
+├── Context("Gestion des rôles")
+│   ├── It("ajoute un rôle")
+│   └── It("retire un rôle")
+│
+├── Context("Suppression")
+│   ├── It("bloque si UserOwnsObjects=true")
+│   └── It("supprime sinon")
+│
+└── Context("Idempotence")
+    └── It("2 réconciliations identiques = 0 mutation")
+```
+
+#### Cas de test — Transverse
+
+```
+Describe("Transverse")
+├── It("Les events sont visibles via l'API Events")
+├── It("GenerationChangedPredicate filtre les updates de status")
+└── It("ObservedGeneration correspond à metadata.generation")
+```
+
+### 7C — Tests full-stack (envtest + testcontainers)
+
+#### Fichier créé
+
+- `test/integration/fullstack_test.go`
+
+#### Objectif
+
+Combiner un vrai API Server (envtest) avec un vrai SQL Server (testcontainers). Les contrôleurs utilisent le **vrai** client SQL, pas un mock.
+
+#### Setup
+
+```go
+// Build tag: //go:build fullstack
+
+var (
+    testEnv       *envtest.Environment
+    sqlHost       string
+    sqlPort       int
+    sqlCleanup    func()
+)
+
+func TestFullStack(t *testing.T) {
+    // 1. Démarrer testcontainers SQL Server
+    sqlHost, sqlPort, sqlCleanup = setupSQLServer(t)
+    defer sqlCleanup()
+
+    // 2. Démarrer envtest
+    testEnv = &envtest.Environment{...}
+    cfg, _ := testEnv.Start()
+
+    // 3. Enregistrer les contrôleurs avec le VRAI SQLClientFactory
+    mgr, _ := ctrl.NewManager(cfg, ...)
+    realFactory := func(host string, port int, user, pass string) (sql.SQLClient, error) {
+        return sql.NewMSSQLClient(host, port, user, pass)
+    }
+    // ... enregistrer les 3 contrôleurs avec realFactory
+
+    // 4. Lancer les tests
+    RegisterFailHandler(Fail)
+    RunSpecs(t, "Full Stack Suite")
+}
+```
+
+#### Scénarios
+
+```
+Describe("Full Stack — Database")
+├── It("CR Database → base créée sur SQL Server réel")
+│   → kubectl create Secret SA (avec vrais credentials SQL)
+│   → kubectl create Database CR
+│   → Eventually: status Ready=True
+│   → Vérifier via connexion SQL directe: SELECT name FROM sys.databases WHERE name = 'testdb'
+│   → Vérifier collation, owner
+│
+├── It("Suppression avec Delete → base supprimée sur SQL Server")
+│   → kubectl delete Database CR
+│   → Vérifier: base n'existe plus dans sys.databases
+│
+└── It("Suppression avec Retain → base conservée")
+    → kubectl delete → vérifier: base existe toujours
+
+Describe("Full Stack — Login")
+├── It("CR Login → login créé sur SQL Server réel")
+├── It("Rotation mot de passe → connexion avec ancien mdp échoue, nouveau réussit")
+└── It("Suppression → login supprimé")
+
+Describe("Full Stack — DatabaseUser")
+├── It("Cycle complet: Database + Login + DatabaseUser → user avec rôles")
+│   → Créer les 3 CRs en séquence
+│   → Vérifier sur SQL Server: user existe, rôles attribués
+│
+├── It("Modifier les rôles → convergence sur SQL Server")
+│   → Ajouter/retirer des rôles dans le spec
+│   → Vérifier sur SQL Server
+│
+└── It("Supprimer dans l'ordre inverse → cleanup complet")
+    → Delete DatabaseUser → user supprimé
+    → Delete Login → login supprimé
+    → Delete Database → base supprimée
+
+Describe("Full Stack — Résilience")
+├── It("SQL Server restart → réconciliation reprend")
+│   → Créer des CRs → Ready
+│   → Arrêter le container SQL Server
+│   → Eventually: conditions passent à Ready=False
+│   → Redémarrer le container
+│   → Eventually: conditions repassent à Ready=True
+│
+└── It("Drift detection → re-création automatique")
+    → Créer une CR Database → Ready
+    → DROP DATABASE directement via SQL
+    → Attendre le prochain cycle de réconciliation (≤30s)
+    → Vérifier: base recréée sur SQL Server
+```
+
+#### Commande
+
+```bash
+go test -tags=fullstack -v -count=1 -timeout=5m ./test/integration/...
+```
+
+### Résumé des fichiers de test
+
+```
+internal/sql/
+├── client_integration_test.go      # 7A — testcontainers, //go:build integration
+└── testhelper_test.go              # Helper shared
+
+internal/controller/
+├── suite_test.go                   # 7B — envtest setup
+├── database_controller_integration_test.go
+├── login_controller_integration_test.go
+└── databaseuser_controller_integration_test.go
+
+test/integration/
+└── fullstack_test.go               # 7C — envtest + testcontainers, //go:build fullstack
+```
+
+### Makefile targets
+
+```makefile
+.PHONY: test test-integration test-fullstack
+
+test:                               ## Tests unitaires + envtest
+	go test ./... -count=1
+
+test-integration:                   ## Tests d'intégration SQL (nécessite Docker)
+	go test -tags=integration -v -count=1 -timeout=5m ./internal/sql/...
+
+test-fullstack:                     ## Tests full-stack envtest + SQL Server (nécessite Docker)
+	go test -tags=fullstack -v -count=1 -timeout=10m ./test/integration/...
+
+test-all: test test-integration test-fullstack  ## Tous les tests
+```
+
+### Critères couverts
+
+AC-9.2.1 → AC-9.2.18, AC-9.3.1 → AC-9.3.16, AC-9.4.1 → AC-9.4.4
+
+---
+
+## Étape 8 — Observabilité (anciennement Étape 7)
 
 ### Fichiers modifiés
 
@@ -428,7 +825,7 @@ AC-5.4.1, AC-5.4.2, AC-5.4.3, AC-6.1.1 → AC-6.1.3, AC-6.3.1, AC-6.3.2
 
 ---
 
-## Étape 8 — Helm Chart
+## Étape 9 — Helm Chart
 
 ### Fichiers créés
 
@@ -455,7 +852,7 @@ AC-1.3.1 → AC-1.3.4
 
 ---
 
-## Étape 9 — CI/CD (GitHub Actions)
+## Étape 10 — CI/CD (GitHub Actions)
 
 ### Fichiers créés
 
@@ -471,7 +868,7 @@ AC-1.2.1, AC-1.2.2, AC-1.2.3
 
 ---
 
-## Étape 10 — Tests E2E
+## Étape 11 — Tests E2E
 
 ### Fichier créé
 
@@ -493,7 +890,7 @@ AC-9.3.1, AC-5.3.2
 
 ---
 
-## Étape 11 — Haute disponibilité & Résilience [P2]
+## Étape 12 — Haute disponibilité & Résilience [P2]
 
 ### Actions
 
@@ -507,7 +904,7 @@ AC-7.1 → AC-7.4, AC-8.1 → AC-8.3
 
 ---
 
-## Étape 12 — Métriques Prometheus [P2]
+## Étape 13 — Métriques Prometheus [P2]
 
 ### Actions
 
@@ -533,25 +930,31 @@ AC-6.2.1 → AC-6.2.3
     │       │
     │       ├── Étape 2 (SQL client)
     │       │       │
-    │       │       └── Étape 3 (mock)
+    │       │       ├── Étape 3 (mock)
+    │       │       │       │
+    │       │       │   ┌───┼───────────┐
+    │       │       │   │   │           │
+    │       │       │ Ét.4  Ét.5      Ét.6
+    │       │       │ (DB)  (Login)  (DBUser)
+    │       │       │   │   │           │
+    │       │       │   └───┼───────────┘
+    │       │       │       │
+    │       │       ├── Étape 7A (tests intégration SQL — testcontainers)
+    │       │       │
+    │       │       └── Étape 7B (tests intégration contrôleurs — envtest) ← dépend de 3-6
     │       │               │
-    │       │       ┌───────┼───────┐
-    │       │       │       │       │
-    │       │    Étape 4  Étape 5  Étape 6
-    │       │   (Database) (Login) (DBUser)
-    │       │       │       │       │
-    │       │       └───────┼───────┘
-    │       │               │
-    │       │           Étape 7 (observabilité)
+    │       │               └── Étape 7C (tests full-stack) ← dépend de 7A + 7B
     │       │
-    │       └── Étape 8 (Helm chart)
+    │       │── Étape 8 (observabilité) ← dépend de 4-6
+    │       │
+    │       └── Étape 9 (Helm chart)
     │
-    ├── Étape 9 (CI/CD)
+    ├── Étape 10 (CI/CD)
     │
-    └── Étape 10 (E2E) ← dépend de 4-8
+    └── Étape 11 (E2E) ← dépend de 7-9
             │
-            ├── Étape 11 (HA) [P2]
-            └── Étape 12 (métriques) [P2]
+            ├── Étape 12 (HA) [P2]
+            └── Étape 13 (métriques) [P2]
 ```
 
 ---
@@ -562,11 +965,12 @@ AC-6.2.1 → AC-6.2.3
 |---|---|---|
 | 1 | Étape 0 — Scaffolding | — |
 | 2 | Étape 1 — Types API | — |
-| 3 | Étape 2 — Client SQL | Étape 9 (CI) |
-| 4 | Étape 3 — Mock | — |
+| 3 | Étape 2 — Client SQL | Étape 10 (CI) |
+| 4 | Étape 3 — Mock | Étape 7A (tests intégration SQL) |
 | 5 | Étape 4 — Contrôleur Database | — |
 | 6 | Étape 5 — Contrôleur Login | — |
-| 7 | Étape 6 — Contrôleur DatabaseUser | Étape 8 (Helm) |
-| 8 | Étape 7 — Observabilité | — |
-| 9 | Étape 10 — Tests E2E | — |
-| 10 | Étape 11 — HA [P2] | Étape 12 (métriques) |
+| 7 | Étape 6 — Contrôleur DatabaseUser | Étape 9 (Helm) |
+| 8 | Étape 7B — Tests intégration envtest | Étape 8 (observabilité) |
+| 9 | Étape 7C — Tests full-stack | — |
+| 10 | Étape 11 — Tests E2E | — |
+| 11 | Étape 12 — HA [P2] | Étape 13 (métriques) |
