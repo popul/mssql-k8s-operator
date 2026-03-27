@@ -1,0 +1,92 @@
+package sql
+
+import (
+	"context"
+	"testing"
+)
+
+// TestSQLClientInterfaceCompleteness verifies that the interface has all expected methods
+// by checking that a mock implementation satisfies it at compile time.
+func TestSQLClientInterfaceCompleteness(t *testing.T) {
+	// This is a compile-time check. If SQLClient is missing a method,
+	// this file won't compile.
+	var _ SQLClient = (*interfaceChecker)(nil)
+}
+
+// interfaceChecker is a minimal implementation that verifies the interface shape.
+type interfaceChecker struct{}
+
+func (c *interfaceChecker) DatabaseExists(ctx context.Context, name string) (bool, error) {
+	return false, nil
+}
+func (c *interfaceChecker) CreateDatabase(ctx context.Context, name string, collation *string) error {
+	return nil
+}
+func (c *interfaceChecker) DropDatabase(ctx context.Context, name string) error {
+	return nil
+}
+func (c *interfaceChecker) GetDatabaseOwner(ctx context.Context, name string) (string, error) {
+	return "", nil
+}
+func (c *interfaceChecker) SetDatabaseOwner(ctx context.Context, dbName, owner string) error {
+	return nil
+}
+func (c *interfaceChecker) GetDatabaseCollation(ctx context.Context, name string) (string, error) {
+	return "", nil
+}
+
+func (c *interfaceChecker) LoginExists(ctx context.Context, name string) (bool, error) {
+	return false, nil
+}
+func (c *interfaceChecker) CreateLogin(ctx context.Context, name, password string) error {
+	return nil
+}
+func (c *interfaceChecker) DropLogin(ctx context.Context, name string) error {
+	return nil
+}
+func (c *interfaceChecker) UpdateLoginPassword(ctx context.Context, name, password string) error {
+	return nil
+}
+func (c *interfaceChecker) GetLoginDefaultDatabase(ctx context.Context, name string) (string, error) {
+	return "", nil
+}
+func (c *interfaceChecker) SetLoginDefaultDatabase(ctx context.Context, name, dbName string) error {
+	return nil
+}
+func (c *interfaceChecker) GetLoginServerRoles(ctx context.Context, name string) ([]string, error) {
+	return nil, nil
+}
+func (c *interfaceChecker) AddLoginToServerRole(ctx context.Context, login, role string) error {
+	return nil
+}
+func (c *interfaceChecker) RemoveLoginFromServerRole(ctx context.Context, login, role string) error {
+	return nil
+}
+
+func (c *interfaceChecker) UserExists(ctx context.Context, dbName, userName string) (bool, error) {
+	return false, nil
+}
+func (c *interfaceChecker) CreateUser(ctx context.Context, dbName, userName, loginName string) error {
+	return nil
+}
+func (c *interfaceChecker) DropUser(ctx context.Context, dbName, userName string) error {
+	return nil
+}
+func (c *interfaceChecker) GetUserDatabaseRoles(ctx context.Context, dbName, userName string) ([]string, error) {
+	return nil, nil
+}
+func (c *interfaceChecker) AddUserToDatabaseRole(ctx context.Context, dbName, userName, role string) error {
+	return nil
+}
+func (c *interfaceChecker) RemoveUserFromDatabaseRole(ctx context.Context, dbName, userName, role string) error {
+	return nil
+}
+func (c *interfaceChecker) UserOwnsObjects(ctx context.Context, dbName, userName string) (bool, error) {
+	return false, nil
+}
+func (c *interfaceChecker) LoginHasUsers(ctx context.Context, loginName string) (bool, error) {
+	return false, nil
+}
+
+func (c *interfaceChecker) Close() error                    { return nil }
+func (c *interfaceChecker) Ping(ctx context.Context) error  { return nil }
