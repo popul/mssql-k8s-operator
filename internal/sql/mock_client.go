@@ -424,6 +424,13 @@ func (m *MockClient) UserOwnsObjects(_ context.Context, dbName, userName string)
 	return u.OwnsObjects, nil
 }
 
+// GetMockUser returns the internal MockUser for direct inspection in tests.
+func (m *MockClient) GetMockUser(dbName, userName string) *MockUser {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.users[userKey(dbName, userName)]
+}
+
 // --- Cross-reference checks ---
 
 func (m *MockClient) LoginHasUsers(_ context.Context, loginName string) (bool, error) {
