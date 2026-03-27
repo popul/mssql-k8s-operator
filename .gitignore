@@ -2,3 +2,8 @@ bin/
 *.exe
 *.test
 *.out
+*.swp
+.idea/
+.vscode/
+cover.out
+coverage.out

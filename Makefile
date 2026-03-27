@@ -1,4 +1,4 @@
-.PHONY: all build test test-integration test-all generate manifests install deploy docker-build docker-push clean lint
+.PHONY: all build test test-integration test-fullstack test-e2e test-all generate manifests install deploy docker-build docker-push clean lint
 
 IMG ?= mssql-k8s-operator:latest
 
@@ -12,6 +12,12 @@ test:
 
 test-integration:
 	go test -tags=integration ./internal/sql/... -count=1 -v -timeout=300s
+
+test-fullstack:
+	go test -tags=fullstack ./... -count=1 -v -timeout=600s
+
+test-e2e:
+	go test -tags=e2e ./test/e2e/... -count=1 -v -timeout=900s
 
 test-all: test test-integration
 
