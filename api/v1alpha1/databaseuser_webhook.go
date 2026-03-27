@@ -62,6 +62,13 @@ func (r *DatabaseUser) ValidateUpdate(old runtime.Object) ([]string, error) {
 			"server tls is immutable"))
 	}
 
+	// loginRef is immutable
+	if r.Spec.LoginRef.Name != oldUser.Spec.LoginRef.Name {
+		allErrs = append(allErrs, field.Forbidden(
+			field.NewPath("spec", "loginRef", "name"),
+			"loginRef is immutable after creation"))
+	}
+
 	if len(allErrs) > 0 {
 		return nil, allErrs.ToAggregate()
 	}

@@ -18,6 +18,9 @@ import (
 const (
 	// sqlOperationTimeout is the maximum time for a single SQL operation.
 	sqlOperationTimeout = 30 * time.Second
+
+	// requeueInterval is the base interval between periodic reconciliation.
+	requeueInterval = 30 * time.Second
 )
 
 // getCredentialsFromSecret reads "username" and "password" keys from a Kubernetes Secret.
@@ -55,8 +58,17 @@ func sqlContext(ctx context.Context) (context.Context, context.CancelFunc) {
 	return context.WithTimeout(ctx, sqlOperationTimeout)
 }
 
+// toSet converts a string slice to a map for O(1) lookups.
+func toSet(items []string) map[string]bool {
+	s := make(map[string]bool, len(items))
+	for _, item := range items {
+		s[item] = true
+	}
+	return s
+}
+
 // requeueWithJitter returns a RequeueAfter duration with ±20% jitter to avoid thundering herd.
 func requeueWithJitter(base time.Duration) time.Duration {
-	jitter := time.Duration(rand.Int63n(int64(base / 5)))
+	jitter := time.Duration(rand.Int63n(int64(base*2/5))) - base/5
 	return base + jitter
 }

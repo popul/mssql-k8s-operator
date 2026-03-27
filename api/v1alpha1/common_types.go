@@ -3,6 +3,7 @@ package v1alpha1
 // ServerReference defines how to connect to a SQL Server instance.
 type ServerReference struct {
 	// Host is the hostname or IP of the SQL Server instance.
+	// +kubebuilder:validation:MinLength=1
 	Host string `json:"host"`
 
 	// Port is the port number. Defaults to 1433.
@@ -22,12 +23,14 @@ type ServerReference struct {
 // SecretReference is a reference to a Kubernetes Secret by name (same namespace).
 type SecretReference struct {
 	// Name of the Secret.
+	// +kubebuilder:validation:MinLength=1
 	Name string `json:"name"`
 }
 
 // LoginReference is a reference to a Login CR by name (same namespace).
 type LoginReference struct {
 	// Name of the Login CR.
+	// +kubebuilder:validation:MinLength=1
 	Name string `json:"name"`
 }
 

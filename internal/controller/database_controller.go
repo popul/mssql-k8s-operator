@@ -26,8 +26,6 @@ import (
 	sqlclient "github.com/popul/mssql-k8s-operator/internal/sql"
 )
 
-const requeueInterval = 30 * time.Second
-
 // DatabaseReconciler reconciles a Database object.
 type DatabaseReconciler struct {
 	client.Client

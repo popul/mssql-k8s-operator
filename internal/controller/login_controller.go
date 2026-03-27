@@ -308,11 +308,3 @@ func (r *LoginReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		}).
 		Complete(r)
 }
-
-func toSet(items []string) map[string]bool {
-	s := make(map[string]bool, len(items))
-	for _, item := range items {
-		s[item] = true
-	}
-	return s
-}
