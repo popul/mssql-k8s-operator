@@ -49,7 +49,8 @@
 ### 2.3 Mise à jour [P1]
 
 - [ ] **AC-2.3.1** — **Given** une CR `Database` existante, **When** je modifie `owner` dans le spec, **Then** le propriétaire de la base est mis à jour sur SQL Server via `ALTER AUTHORIZATION`.
-- [ ] **AC-2.3.2** — **Given** une CR `Database` existante, **When** je modifie `databaseName`, **Then** le contrôleur refuse la mise à jour (champ immutable) et positionne une condition `Ready=False` avec un `Reason: ImmutableFieldChanged`.
+- [ ] **AC-2.3.2** — **Given** une CR `Database` existante avec une collation non définie initialement, **When** je définis `collation` dans le spec, **Then** le contrôleur refuse la mise à jour (la collation ne peut pas être changée sur une base existante) et positionne `Ready=False` avec `Reason: CollationChangeNotSupported`.
+- [ ] **AC-2.3.3** — **Given** une CR `Database` existante, **When** je modifie `databaseName`, **Then** le contrôleur refuse la mise à jour (champ immutable) et positionne une condition `Ready=False` avec un `Reason: ImmutableFieldChanged`.
 
 ### 2.4 Suppression [P1]
 
@@ -127,6 +128,8 @@
 - [ ] **AC-4.3.2** — **Given** une CR `DatabaseUser` existante, **When** je retire un rôle de `databaseRoles`, **Then** l'utilisateur est retiré de ce rôle.
 
 ### 4.4 Suppression [P1]
+
+> **Note** : contrairement à `Database` et `Login`, `DatabaseUser` n'a pas de `deletionPolicy`. La suppression d'un utilisateur SQL est une opération peu risquée (l'utilisateur n'a pas de données propres). Le comportement est toujours `DROP USER`.
 
 - [ ] **AC-4.4.1** — **Given** une CR `DatabaseUser`, **When** je supprime la CR, **Then** l'utilisateur est supprimé (DROP USER) de la base de données cible.
 - [ ] **AC-4.4.2** — **Given** une CR `DatabaseUser` dont l'utilisateur possède des objets (schéma, tables), **When** je supprime la CR, **Then** la suppression échoue avec `Reason: UserOwnsObjects` et un event `Warning`.
@@ -229,9 +232,11 @@
 - [ ] **AC-9.2.8** — **Given** un login existant, **When** on appelle `UpdateLoginPassword("testlogin", "NewP@ss456")`, **Then** la connexion avec le nouveau mot de passe réussit.
 - [ ] **AC-9.2.9** — **Given** un login existant, **When** on appelle `AddLoginToServerRole("testlogin", "dbcreator")` puis `GetLoginServerRoles("testlogin")`, **Then** la liste contient `dbcreator`.
 - [ ] **AC-9.2.10** — **Given** un login avec le rôle `dbcreator`, **When** on appelle `RemoveLoginFromServerRole("testlogin", "dbcreator")`, **Then** `GetLoginServerRoles("testlogin")` ne contient plus `dbcreator`.
+- [ ] **AC-9.2.10b** — **Given** un login existant, **When** on appelle `SetLoginDefaultDatabase("testlogin", "testdb")` puis `GetLoginDefaultDatabase("testlogin")`, **Then** le retour est `testdb`.
 - [ ] **AC-9.2.11** — **Given** un appel à `DropLogin("nonexistent")`, **Then** aucune erreur (idempotent).
 - [ ] **AC-9.2.12** — **Given** une base et un login existants, **When** on appelle `CreateUser("testdb", "testuser", "testlogin")`, **Then** `UserExists("testdb", "testuser")` retourne `true`.
 - [ ] **AC-9.2.13** — **Given** un utilisateur existant, **When** on appelle `AddUserToDatabaseRole("testdb", "testuser", "db_datareader")`, **Then** `GetUserDatabaseRoles("testdb", "testuser")` contient `db_datareader`.
+- [ ] **AC-9.2.13b** — **Given** un utilisateur membre de `db_datareader`, **When** on appelle `RemoveUserFromDatabaseRole("testdb", "testuser", "db_datareader")`, **Then** `GetUserDatabaseRoles("testdb", "testuser")` ne contient plus `db_datareader`.
 - [ ] **AC-9.2.14** — **Given** un utilisateur sans objets, **When** on appelle `DropUser("testdb", "testuser")`, **Then** `UserExists("testdb", "testuser")` retourne `false`.
 - [ ] **AC-9.2.15** — **Given** un utilisateur qui possède un schéma, **When** on appelle `UserOwnsObjects("testdb", "testuser")`, **Then** le retour est `true`.
 - [ ] **AC-9.2.16** — **Given** un login associé à un user dans une base, **When** on appelle `LoginHasUsers("testlogin")`, **Then** le retour est `true`.
@@ -286,17 +291,17 @@
 
 | Catégorie | Nombre de critères |
 |---|---|
-| Infrastructure & CI | 7 |
-| CRD Database | 17 |
-| CRD Login | 13 |
-| CRD DatabaseUser | 10 |
-| Comportements transverses | 12 |
+| Infrastructure & CI | 11 |
+| CRD Database | 20 |
+| CRD Login | 14 |
+| CRD DatabaseUser | 11 |
+| Comportements transverses | 14 |
 | Observabilité | 8 |
 | Haute disponibilité | 4 |
 | Résilience | 3 |
 | Tests — Couverture | 2 |
-| Tests — Intégration SQL (testcontainers) | 18 |
+| Tests — Intégration SQL (testcontainers) | 20 |
 | Tests — Intégration Contrôleurs (envtest) | 16 |
 | Tests — Full stack (envtest + testcontainers) | 4 |
 | Tests — E2E | 1 |
-| **Total** | **115** |
+| **Total** | **128** |

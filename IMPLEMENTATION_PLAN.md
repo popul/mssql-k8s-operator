@@ -57,6 +57,7 @@ type ServerReference struct {
     Host              string          `json:"host"`
     Port              *int32          `json:"port,omitempty"`       // +kubebuilder:default=1433
     CredentialsSecret SecretReference `json:"credentialsSecret"`
+    TLS               *bool           `json:"tls,omitempty"`        // +optional, +kubebuilder:default=false
 }
 
 type SecretReference struct {
@@ -170,6 +171,10 @@ type SQLClient interface {
     GetUserDatabaseRoles(ctx context.Context, dbName, userName string) ([]string, error)
     AddUserToDatabaseRole(ctx context.Context, dbName, userName, role string) error
     RemoveUserFromDatabaseRole(ctx context.Context, dbName, userName, role string) error
+    UserOwnsObjects(ctx context.Context, dbName, userName string) (bool, error)
+
+    // Cross-reference checks
+    LoginHasUsers(ctx context.Context, loginName string) (bool, error)
 
     // Connection
     Close() error
@@ -191,7 +196,7 @@ type SQLClient interface {
 
 ### Critères couverts
 
-AC-5.1.1, AC-5.1.2, AC-5.2.1, AC-5.2.2, AC-9.2.2
+AC-5.1.1, AC-5.1.2, AC-5.1.3, AC-5.1.4, AC-5.2.1, AC-5.2.2, AC-5.2.4
 
 ---
 
@@ -296,7 +301,7 @@ func (r *DatabaseReconciler) SetupWithManager(mgr ctrl.Manager) error {
 
 ### Critères couverts
 
-AC-2.1.1 → AC-2.1.5, AC-2.2.1, AC-2.3.1, AC-2.3.2, AC-2.4.1 → AC-2.4.3, AC-2.5.1, AC-2.5.2, AC-2.6.1 → AC-2.6.3, AC-5.4.1, AC-5.4.2, AC-5.5.1
+AC-2.1.1 → AC-2.1.5, AC-2.2.1, AC-2.3.1 → AC-2.3.3, AC-2.4.1 → AC-2.4.3, AC-2.5.1, AC-2.5.2, AC-2.6.1 → AC-2.6.3, AC-5.1.3, AC-5.1.4, AC-5.2.3, AC-5.4.1, AC-5.4.2, AC-5.5.1
 
 ---
 
@@ -336,9 +341,12 @@ Reconcile(ctx, req)
 
 ### Détection de rotation du mot de passe
 
-- Stocker un hash SHA-256 du password dans une annotation de la CR (`mssql.popul.io/password-hash`).
-- À chaque réconciliation, comparer le hash actuel du Secret avec l'annotation.
-- Si différent → `ALTER LOGIN ... WITH PASSWORD`, mettre à jour l'annotation.
+- Stocker le `ResourceVersion` du Secret password dans `status.passwordSecretResourceVersion`.
+- À chaque réconciliation, comparer le `ResourceVersion` actuel du Secret avec celui stocké dans le status.
+- Si différent → `ALTER LOGIN ... WITH PASSWORD`, mettre à jour le status.
+- Ajouter un watch sur les Secrets référencés par les CRs Login pour déclencher une réconciliation lorsque le Secret est modifié (même si `spec` n'a pas changé, car `GenerationChangedPredicate` ne filtre que les changements sur la CR Login elle-même, pas sur les Secrets).
+
+> **Choix de design** : on utilise `status.passwordSecretResourceVersion` plutôt qu'une annotation pour éviter de muter les metadata de la CR (ce qui causerait un event de reconciliation supplémentaire, même si `GenerationChangedPredicate` le filtrerait).
 
 ### Tests
 
@@ -369,7 +377,8 @@ Reconcile(ctx, req)
 ├─ 1-4. Fetch, Finalizer, Secret SA, Connect
 │
 ├─ 5. Résoudre loginRef
-│     ├─ Fetch la CR Login par nom dans le même namespace
+│     ├─ Fetch la CR Login par `loginRef.name` (nom K8s) dans le même namespace
+│     ├─ Extraire `spec.loginName` de la CR Login (nom SQL Server, ex: "myapp_user")
 │     └─ Pas trouvée → condition Ready=False, Reason=LoginRefNotFound, RequeueAfter(10s)
 │
 ├─ 6. Observer : UserExists() + GetUserDatabaseRoles()
@@ -806,22 +815,25 @@ AC-9.2.1 → AC-9.2.18, AC-9.3.1 → AC-9.3.16, AC-9.4.1 → AC-9.4.4
 
 ---
 
-## Étape 8 — Observabilité (anciennement Étape 7)
+## Étape 8 — Observabilité
 
 ### Fichiers modifiés
 
 - `cmd/main.go` — configuration zap JSON, health endpoints
-- `internal/controller/*.go` — ajout des `recorder.Event()`
+- `internal/controller/*.go` — audit des logs et events
 
 ### Actions
 
 - Configurer le logger zap en mode JSON production.
 - Vérifier que `/healthz` et `/readyz` sont exposés (scaffoldé par Kubebuilder).
-- Ajouter `EventRecorder` dans chaque contrôleur, émettre les events listés dans les AC.
+- Auditer que l'`EventRecorder` est utilisé dans chaque contrôleur (implémenté dans les étapes 4-6, cette étape fait l'audit de complétude).
+- Vérifier qu'aucun credential n'apparaît dans les logs quel que soit le niveau de verbosité.
 
 ### Critères couverts
 
-AC-5.4.1, AC-5.4.2, AC-5.4.3, AC-6.1.1 → AC-6.1.3, AC-6.3.1, AC-6.3.2
+AC-5.2.1, AC-5.4.3, AC-6.1.1 → AC-6.1.3, AC-6.3.1, AC-6.3.2
+
+> **Note** : AC-5.4.1 et AC-5.4.2 (events Normal et Warning) sont implémentés dans les étapes 4-6 (contrôleurs). Cette étape fait la vérification et ajoute les events manquants.
 
 ---
 
@@ -886,7 +898,7 @@ AC-1.2.1, AC-1.2.2, AC-1.2.3
 
 ### Critères couverts
 
-AC-9.3.1, AC-5.3.2
+AC-9.5.1, AC-5.3.2
 
 ---
 

@@ -52,9 +52,9 @@ spec:
 Fonctionnalités :
 
 - Création de la base de données si elle n'existe pas
-- Mise à jour des propriétés modifiables (owner, collation si vide)
+- Mise à jour des propriétés modifiables (owner). La collation est immutable après création (limitation SQL Server).
 - Suppression de la base lorsque la CR est supprimée (configurable via `spec.deletionPolicy: Delete | Retain`)
-- Status conditions (`Ready`, `Error`) avec messages détaillés
+- Status conditions (`Ready=True/False`) avec `Reason` et `Message` détaillés
 - Finalizer pour contrôler la suppression
 
 #### CRD `Login`
@@ -179,12 +179,14 @@ Fonctionnalités :
 
 ### 3.3 Boucle de réconciliation
 
-Chaque contrôleur suit le pattern standard :
+Chaque contrôleur suit le pattern standard (détaillé dans `CLAUDE.md`) :
 
-1. **Observer** — Recevoir l'événement (create/update/delete) sur la CR
-2. **Comparer** — Lire l'état actuel sur SQL Server via requête T-SQL
-3. **Agir** — Exécuter les commandes DDL/DCL nécessaires pour converger
-4. **Rapporter** — Mettre à jour le `.status` de la CR avec les conditions
+1. **Fetch** — Récupérer la CR. Si `NotFound`, retourner sans erreur.
+2. **Finalizer** — Ajouter si absent, exécuter le cleanup si `DeletionTimestamp` est positionné.
+3. **Observer** — Lire l'état actuel sur SQL Server via requête T-SQL.
+4. **Comparer** — Diff entre état désiré (`spec`) et état observé.
+5. **Agir** — Exécuter les commandes DDL/DCL nécessaires pour converger.
+6. **Rapporter** — Mettre à jour le `.status` de la CR avec les conditions et `ObservedGeneration`.
 
 Intervalle de re-queue par défaut : **30 secondes** (configurable).
 
@@ -192,7 +194,7 @@ Intervalle de re-queue par défaut : **30 secondes** (configurable).
 
 - Backoff exponentiel en cas d'erreur de connexion SQL Server
 - Events Kubernetes émis pour chaque action significative
-- Conditions de status normalisées (`Ready`, `Degraded`, `Error`)
+- Condition de status unique `Ready` avec `Status` ∈ {`True`, `False`, `Unknown`} et `Reason` PascalCase
 - Les erreurs SQL transitoires (timeouts, connexion perdue) déclenchent un requeue, pas un échec définitif
 
 ### 3.5 Sécurité

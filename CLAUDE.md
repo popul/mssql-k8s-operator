@@ -72,7 +72,7 @@ Règles impératives :
 | Réconciliation réussie, rien à faire | `ctrl.Result{}` |
 | Polling périodique nécessaire | `ctrl.Result{RequeueAfter: 30 * time.Second}` |
 | Erreur transitoire (connexion SQL perdue) | `ctrl.Result{}, err` (back-off auto) |
-| Erreur permanente (config invalide) | Set condition `Error`, `ctrl.Result{}` (pas d'erreur, pas de retry infini) |
+| Erreur permanente (config invalide) | Set condition `Ready=False` avec `Reason` explicite, `ctrl.Result{}` (pas d'erreur, pas de retry infini) |
 
 Ne jamais utiliser `ctrl.Result{Requeue: true}` en boucle serrée.
 
@@ -92,10 +92,9 @@ Utiliser `predicate.GenerationChangedPredicate{}` pour éviter de réconcilier s
 Utiliser le type standard `metav1.Condition` :
 
 ```go
-// Condition types
+// Condition types — on utilise uniquement Ready, les erreurs sont exprimées via Status=False + Reason
 const (
-    ConditionReady    = "Ready"
-    ConditionDegraded = "Degraded"
+    ConditionReady = "Ready"
 )
 ```
 
@@ -143,7 +142,10 @@ const (
 
 ```bash
 make test                    # Unit + envtest
-make test-e2e                # E2E (nécessite un cluster)
+make test-integration        # Tests d'intégration SQL (testcontainers, nécessite Docker)
+make test-fullstack          # Tests full-stack envtest + SQL Server (nécessite Docker)
+make test-e2e                # E2E dans un cluster kind (nécessite Docker)
+make test-all                # Tous les tests
 go test ./internal/sql/...   # Tests du client SQL uniquement
 ```
 
