@@ -16,6 +16,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/predicate"
 
 	v1alpha1 "github.com/popul/mssql-k8s-operator/api/v1alpha1"
 	opmetrics "github.com/popul/mssql-k8s-operator/internal/metrics"
@@ -76,7 +77,7 @@ func (r *DatabaseUserReconciler) Reconcile(ctx context.Context, req ctrl.Request
 	}
 
 	// 4. Read credentials Secret
-	username, password, err := r.getCredentials(ctx, dbUser.Namespace, dbUser.Spec.Server.CredentialsSecret.Name)
+	username, password, err := getCredentialsFromSecret(ctx, r.Client, dbUser.Namespace, dbUser.Spec.Server.CredentialsSecret.Name)
 	if err != nil {
 		if apierrors.IsNotFound(err) {
 			return r.setConditionAndReturn(ctx, &dbUser, metav1.ConditionFalse, v1alpha1.ReasonSecretNotFound,
@@ -86,16 +87,7 @@ func (r *DatabaseUserReconciler) Reconcile(ctx context.Context, req ctrl.Request
 	}
 
 	// 5. Connect
-	port := int32(1433)
-	if dbUser.Spec.Server.Port != nil {
-		port = *dbUser.Spec.Server.Port
-	}
-	tlsEnabled := false
-	if dbUser.Spec.Server.TLS != nil {
-		tlsEnabled = *dbUser.Spec.Server.TLS
-	}
-
-	sqlClient, err := r.SQLClientFactory(dbUser.Spec.Server.Host, int(port), username, password, tlsEnabled)
+	sqlClient, err := connectToSQL(dbUser.Spec.Server, username, password, r.SQLClientFactory)
 	if err != nil {
 		logger.Error(err, "failed to connect to SQL Server")
 		r.Recorder.Event(&dbUser, corev1.EventTypeWarning, v1alpha1.ReasonConnectionFailed, err.Error())
@@ -121,7 +113,8 @@ func (r *DatabaseUserReconciler) Reconcile(ctx context.Context, req ctrl.Request
 	}
 
 	// Reconcile database roles
-	if err := r.reconcileDatabaseRoles(ctx, sqlClient, dbUser.Spec.DatabaseName, dbUser.Spec.UserName, dbUser.Spec.DatabaseRoles); err != nil {
+	if err := r.reconcileDatabaseRoles(ctx, &dbUser, sqlClient, dbUser.Spec.DatabaseName, dbUser.Spec.UserName, dbUser.Spec.DatabaseRoles); err != nil {
+		opmetrics.ReconcileErrors.WithLabelValues("DatabaseUser", "DatabaseRoleReconciliation").Inc()
 		return ctrl.Result{}, err
 	}
 
@@ -131,7 +124,7 @@ func (r *DatabaseUserReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		fmt.Sprintf("User %s is ready in database %s", dbUser.Spec.UserName, dbUser.Spec.DatabaseName))
 }
 
-func (r *DatabaseUserReconciler) reconcileDatabaseRoles(ctx context.Context, sqlClient sqlclient.SQLClient, dbName, userName string, desiredRoles []string) error {
+func (r *DatabaseUserReconciler) reconcileDatabaseRoles(ctx context.Context, dbUser *v1alpha1.DatabaseUser, sqlClient sqlclient.SQLClient, dbName, userName string, desiredRoles []string) error {
 	currentRoles, err := sqlClient.GetUserDatabaseRoles(ctx, dbName, userName)
 	if err != nil {
 		return fmt.Errorf("failed to get database roles: %w", err)
@@ -146,6 +139,8 @@ func (r *DatabaseUserReconciler) reconcileDatabaseRoles(ctx context.Context, sql
 			if err := sqlClient.AddUserToDatabaseRole(ctx, dbName, userName, role); err != nil {
 				return fmt.Errorf("failed to add role %s: %w", role, err)
 			}
+			r.Recorder.Event(dbUser, corev1.EventTypeNormal, "DatabaseRoleAdded",
+				fmt.Sprintf("User %s added to database role %s", userName, role))
 		}
 	}
 
@@ -155,6 +150,8 @@ func (r *DatabaseUserReconciler) reconcileDatabaseRoles(ctx context.Context, sql
 			if err := sqlClient.RemoveUserFromDatabaseRole(ctx, dbName, userName, role); err != nil {
 				return fmt.Errorf("failed to remove role %s: %w", role, err)
 			}
+			r.Recorder.Event(dbUser, corev1.EventTypeNormal, "DatabaseRoleRemoved",
+				fmt.Sprintf("User %s removed from database role %s", userName, role))
 		}
 	}
 
@@ -168,19 +165,11 @@ func (r *DatabaseUserReconciler) handleDeletion(ctx context.Context, dbUser *v1a
 		return ctrl.Result{}, nil
 	}
 
-	username, password, err := r.getCredentials(ctx, dbUser.Namespace, dbUser.Spec.Server.CredentialsSecret.Name)
+	username, password, err := getCredentialsFromSecret(ctx, r.Client, dbUser.Namespace, dbUser.Spec.Server.CredentialsSecret.Name)
 	if err != nil {
 		logger.Error(err, "failed to get credentials for cleanup")
 	} else {
-		port := int32(1433)
-		if dbUser.Spec.Server.Port != nil {
-			port = *dbUser.Spec.Server.Port
-		}
-		tlsEnabled := false
-		if dbUser.Spec.Server.TLS != nil {
-			tlsEnabled = *dbUser.Spec.Server.TLS
-		}
-		sqlClient, err := r.SQLClientFactory(dbUser.Spec.Server.Host, int(port), username, password, tlsEnabled)
+		sqlClient, err := connectToSQL(dbUser.Spec.Server, username, password, r.SQLClientFactory)
 		if err != nil {
 			logger.Error(err, "failed to connect for cleanup")
 		} else {
@@ -213,22 +202,6 @@ func (r *DatabaseUserReconciler) handleDeletion(ctx context.Context, dbUser *v1a
 	return ctrl.Result{}, nil
 }
 
-func (r *DatabaseUserReconciler) getCredentials(ctx context.Context, namespace, secretName string) (string, string, error) {
-	var secret corev1.Secret
-	if err := r.Get(ctx, types.NamespacedName{Name: secretName, Namespace: namespace}, &secret); err != nil {
-		return "", "", err
-	}
-	username, ok := secret.Data["username"]
-	if !ok {
-		return "", "", fmt.Errorf("secret %q missing 'username' key", secretName)
-	}
-	password, ok := secret.Data["password"]
-	if !ok {
-		return "", "", fmt.Errorf("secret %q missing 'password' key", secretName)
-	}
-	return string(username), string(password), nil
-}
-
 func (r *DatabaseUserReconciler) setConditionAndReturn(ctx context.Context, dbUser *v1alpha1.DatabaseUser,
 	status metav1.ConditionStatus, reason, message string) (ctrl.Result, error) {
 
@@ -254,5 +227,6 @@ func (r *DatabaseUserReconciler) setConditionAndReturn(ctx context.Context, dbUs
 func (r *DatabaseUserReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&v1alpha1.DatabaseUser{}).
+		WithEventFilter(predicate.GenerationChangedPredicate{}).
 		Complete(r)
 }

@@ -10,12 +10,12 @@ import (
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/predicate"
 
 	v1alpha1 "github.com/popul/mssql-k8s-operator/api/v1alpha1"
 	opmetrics "github.com/popul/mssql-k8s-operator/internal/metrics"
@@ -67,7 +67,7 @@ func (r *DatabaseReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 	}
 
 	// 3. Read the credentials Secret
-	username, password, err := r.getCredentials(ctx, db.Namespace, db.Spec.Server.CredentialsSecret.Name)
+	username, password, err := getCredentialsFromSecret(ctx, r.Client, db.Namespace, db.Spec.Server.CredentialsSecret.Name)
 	if err != nil {
 		if apierrors.IsNotFound(err) {
 			return r.setConditionAndReturn(ctx, &db, metav1.ConditionFalse, v1alpha1.ReasonSecretNotFound,
@@ -77,16 +77,7 @@ func (r *DatabaseReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 	}
 
 	// 4. Connect to SQL Server
-	port := int32(1433)
-	if db.Spec.Server.Port != nil {
-		port = *db.Spec.Server.Port
-	}
-	tlsEnabled := false
-	if db.Spec.Server.TLS != nil {
-		tlsEnabled = *db.Spec.Server.TLS
-	}
-
-	sqlClient, err := r.SQLClientFactory(db.Spec.Server.Host, int(port), username, password, tlsEnabled)
+	sqlClient, err := connectToSQL(db.Spec.Server, username, password, r.SQLClientFactory)
 	if err != nil {
 		logger.Error(err, "failed to connect to SQL Server")
 		r.Recorder.Event(&db, corev1.EventTypeWarning, v1alpha1.ReasonConnectionFailed, err.Error())
@@ -162,19 +153,11 @@ func (r *DatabaseReconciler) handleDeletion(ctx context.Context, db *v1alpha1.Da
 	}
 
 	if policy == v1alpha1.DeletionPolicyDelete {
-		username, password, err := r.getCredentials(ctx, db.Namespace, db.Spec.Server.CredentialsSecret.Name)
+		username, password, err := getCredentialsFromSecret(ctx, r.Client, db.Namespace, db.Spec.Server.CredentialsSecret.Name)
 		if err != nil {
 			logger.Error(err, "failed to get credentials for cleanup, removing finalizer anyway")
 		} else {
-			port := int32(1433)
-			if db.Spec.Server.Port != nil {
-				port = *db.Spec.Server.Port
-			}
-			tlsEnabled := false
-			if db.Spec.Server.TLS != nil {
-				tlsEnabled = *db.Spec.Server.TLS
-			}
-			sqlClient, err := r.SQLClientFactory(db.Spec.Server.Host, int(port), username, password, tlsEnabled)
+			sqlClient, err := connectToSQL(db.Spec.Server, username, password, r.SQLClientFactory)
 			if err != nil {
 				logger.Error(err, "failed to connect to SQL Server for cleanup, removing finalizer anyway")
 			} else {
@@ -196,24 +179,6 @@ func (r *DatabaseReconciler) handleDeletion(ctx context.Context, db *v1alpha1.Da
 	}
 
 	return ctrl.Result{}, nil
-}
-
-func (r *DatabaseReconciler) getCredentials(ctx context.Context, namespace, secretName string) (string, string, error) {
-	var secret corev1.Secret
-	if err := r.Get(ctx, types.NamespacedName{Name: secretName, Namespace: namespace}, &secret); err != nil {
-		return "", "", err
-	}
-
-	username, ok := secret.Data["username"]
-	if !ok {
-		return "", "", fmt.Errorf("secret %q missing 'username' key", secretName)
-	}
-	password, ok := secret.Data["password"]
-	if !ok {
-		return "", "", fmt.Errorf("secret %q missing 'password' key", secretName)
-	}
-
-	return string(username), string(password), nil
 }
 
 func (r *DatabaseReconciler) setConditionAndReturn(ctx context.Context, db *v1alpha1.Database,
@@ -241,5 +206,6 @@ func (r *DatabaseReconciler) setConditionAndReturn(ctx context.Context, db *v1al
 func (r *DatabaseReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&v1alpha1.Database{}).
+		WithEventFilter(predicate.GenerationChangedPredicate{}).
 		Complete(r)
 }

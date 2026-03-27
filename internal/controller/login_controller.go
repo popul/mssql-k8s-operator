@@ -16,6 +16,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/predicate"
 
 	v1alpha1 "github.com/popul/mssql-k8s-operator/api/v1alpha1"
 	opmetrics "github.com/popul/mssql-k8s-operator/internal/metrics"
@@ -65,7 +66,7 @@ func (r *LoginReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 	}
 
 	// 3. Read credentials Secret
-	username, saPassword, err := r.getCredentials(ctx, login.Namespace, login.Spec.Server.CredentialsSecret.Name)
+	username, saPassword, err := getCredentialsFromSecret(ctx, r.Client, login.Namespace, login.Spec.Server.CredentialsSecret.Name)
 	if err != nil {
 		if apierrors.IsNotFound(err) {
 			return r.setConditionAndReturn(ctx, &login, metav1.ConditionFalse, v1alpha1.ReasonSecretNotFound,
@@ -91,16 +92,7 @@ func (r *LoginReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 	}
 
 	// 5. Connect
-	port := int32(1433)
-	if login.Spec.Server.Port != nil {
-		port = *login.Spec.Server.Port
-	}
-	tlsEnabled := false
-	if login.Spec.Server.TLS != nil {
-		tlsEnabled = *login.Spec.Server.TLS
-	}
-
-	sqlClient, err := r.SQLClientFactory(login.Spec.Server.Host, int(port), username, saPassword, tlsEnabled)
+	sqlClient, err := connectToSQL(login.Spec.Server, username, saPassword, r.SQLClientFactory)
 	if err != nil {
 		logger.Error(err, "failed to connect to SQL Server")
 		r.Recorder.Event(&login, corev1.EventTypeWarning, v1alpha1.ReasonConnectionFailed, err.Error())
@@ -148,7 +140,8 @@ func (r *LoginReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 	}
 
 	// Server roles: compute diff
-	if err := r.reconcileServerRoles(ctx, sqlClient, login.Spec.LoginName, login.Spec.ServerRoles); err != nil {
+	if err := r.reconcileServerRoles(ctx, &login, sqlClient, login.Spec.LoginName, login.Spec.ServerRoles); err != nil {
+		opmetrics.ReconcileErrors.WithLabelValues("Login", "ServerRoleReconciliation").Inc()
 		return ctrl.Result{}, err
 	}
 
@@ -159,7 +152,7 @@ func (r *LoginReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 		fmt.Sprintf("Login %s is ready", login.Spec.LoginName))
 }
 
-func (r *LoginReconciler) reconcileServerRoles(ctx context.Context, sqlClient sqlclient.SQLClient, loginName string, desiredRoles []string) error {
+func (r *LoginReconciler) reconcileServerRoles(ctx context.Context, login *v1alpha1.Login, sqlClient sqlclient.SQLClient, loginName string, desiredRoles []string) error {
 	currentRoles, err := sqlClient.GetLoginServerRoles(ctx, loginName)
 	if err != nil {
 		return fmt.Errorf("failed to get server roles: %w", err)
@@ -174,6 +167,8 @@ func (r *LoginReconciler) reconcileServerRoles(ctx context.Context, sqlClient sq
 			if err := sqlClient.AddLoginToServerRole(ctx, loginName, role); err != nil {
 				return fmt.Errorf("failed to add role %s: %w", role, err)
 			}
+			r.Recorder.Event(login, corev1.EventTypeNormal, "ServerRoleAdded",
+				fmt.Sprintf("Login %s added to server role %s", loginName, role))
 		}
 	}
 
@@ -183,6 +178,8 @@ func (r *LoginReconciler) reconcileServerRoles(ctx context.Context, sqlClient sq
 			if err := sqlClient.RemoveLoginFromServerRole(ctx, loginName, role); err != nil {
 				return fmt.Errorf("failed to remove role %s: %w", role, err)
 			}
+			r.Recorder.Event(login, corev1.EventTypeNormal, "ServerRoleRemoved",
+				fmt.Sprintf("Login %s removed from server role %s", loginName, role))
 		}
 	}
 
@@ -202,19 +199,11 @@ func (r *LoginReconciler) handleDeletion(ctx context.Context, login *v1alpha1.Lo
 	}
 
 	if policy == v1alpha1.DeletionPolicyDelete {
-		username, password, err := r.getCredentials(ctx, login.Namespace, login.Spec.Server.CredentialsSecret.Name)
+		username, password, err := getCredentialsFromSecret(ctx, r.Client, login.Namespace, login.Spec.Server.CredentialsSecret.Name)
 		if err != nil {
 			logger.Error(err, "failed to get credentials for cleanup")
 		} else {
-			port := int32(1433)
-			if login.Spec.Server.Port != nil {
-				port = *login.Spec.Server.Port
-			}
-			tlsEnabled := false
-			if login.Spec.Server.TLS != nil {
-				tlsEnabled = *login.Spec.Server.TLS
-			}
-			sqlClient, err := r.SQLClientFactory(login.Spec.Server.Host, int(port), username, password, tlsEnabled)
+			sqlClient, err := connectToSQL(login.Spec.Server, username, password, r.SQLClientFactory)
 			if err != nil {
 				logger.Error(err, "failed to connect for cleanup")
 			} else {
@@ -248,22 +237,6 @@ func (r *LoginReconciler) handleDeletion(ctx context.Context, login *v1alpha1.Lo
 	return ctrl.Result{}, nil
 }
 
-func (r *LoginReconciler) getCredentials(ctx context.Context, namespace, secretName string) (string, string, error) {
-	var secret corev1.Secret
-	if err := r.Get(ctx, types.NamespacedName{Name: secretName, Namespace: namespace}, &secret); err != nil {
-		return "", "", err
-	}
-	username, ok := secret.Data["username"]
-	if !ok {
-		return "", "", fmt.Errorf("secret %q missing 'username' key", secretName)
-	}
-	password, ok := secret.Data["password"]
-	if !ok {
-		return "", "", fmt.Errorf("secret %q missing 'password' key", secretName)
-	}
-	return string(username), string(password), nil
-}
-
 func (r *LoginReconciler) setConditionAndReturn(ctx context.Context, login *v1alpha1.Login,
 	status metav1.ConditionStatus, reason, message string) (ctrl.Result, error) {
 
@@ -289,6 +262,7 @@ func (r *LoginReconciler) setConditionAndReturn(ctx context.Context, login *v1al
 func (r *LoginReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&v1alpha1.Login{}).
+		WithEventFilter(predicate.GenerationChangedPredicate{}).
 		Complete(r)
 }
 
