@@ -395,8 +395,52 @@ func findCondition(obj client.Object, condType string) *metav1.Condition {
 		conditions = o.Status.Conditions
 	case *mssqlv1.DatabaseUser:
 		conditions = o.Status.Conditions
+	case *mssqlv1.Schema:
+		conditions = o.Status.Conditions
+	case *mssqlv1.Permission:
+		conditions = o.Status.Conditions
+	case *mssqlv1.Backup:
+		conditions = o.Status.Conditions
+	case *mssqlv1.Restore:
+		conditions = o.Status.Conditions
+	case *mssqlv1.AvailabilityGroup:
+		conditions = o.Status.Conditions
+	case *mssqlv1.AGFailover:
+		conditions = o.Status.Conditions
 	}
 	return meta.FindStatusCondition(conditions, condType)
+}
+
+// waitForBackupPhase waits for a Backup CR to reach the given phase.
+func waitForBackupPhase(t *testing.T, key types.NamespacedName, expectedPhase mssqlv1.BackupPhase, timeout time.Duration) *mssqlv1.Backup {
+	t.Helper()
+	bak := &mssqlv1.Backup{}
+	err := wait.PollUntilContextTimeout(ctx, pollInterval, timeout, true, func(ctx context.Context) (bool, error) {
+		if err := k8sClient.Get(ctx, key, bak); err != nil {
+			return false, nil
+		}
+		return bak.Status.Phase == expectedPhase, nil
+	})
+	if err != nil {
+		t.Fatalf("Timed out waiting for Backup %s phase=%s (current=%s)", key, expectedPhase, bak.Status.Phase)
+	}
+	return bak
+}
+
+// waitForRestorePhase waits for a Restore CR to reach the given phase.
+func waitForRestorePhase(t *testing.T, key types.NamespacedName, expectedPhase mssqlv1.RestorePhase, timeout time.Duration) *mssqlv1.Restore {
+	t.Helper()
+	rst := &mssqlv1.Restore{}
+	err := wait.PollUntilContextTimeout(ctx, pollInterval, timeout, true, func(ctx context.Context) (bool, error) {
+		if err := k8sClient.Get(ctx, key, rst); err != nil {
+			return false, nil
+		}
+		return rst.Status.Phase == expectedPhase, nil
+	})
+	if err != nil {
+		t.Fatalf("Timed out waiting for Restore %s phase=%s (current=%s)", key, expectedPhase, rst.Status.Phase)
+	}
+	return rst
 }
 
 // --- Pointer helpers ---
@@ -1705,6 +1749,578 @@ func TestE2EMetrics(t *testing.T) {
 	// Check for custom metrics
 	assertMetricExists(t, metricsStr, "mssql_operator_reconcile_total")
 	assertMetricExists(t, metricsStr, "mssql_operator_reconcile_duration_seconds")
+}
+
+// =============================================================================
+// Schema & Permission E2E Tests
+// =============================================================================
+
+func TestE2ESchemaLifecycle(t *testing.T) {
+	// Prerequisite: create a database for schema tests
+	dbKey := types.NamespacedName{Name: "schema-test-db", Namespace: testNamespace}
+	schemaKey := types.NamespacedName{Name: "test-schema", Namespace: testNamespace}
+
+	// Create database
+	db := &mssqlv1.Database{
+		ObjectMeta: metav1.ObjectMeta{Name: dbKey.Name, Namespace: dbKey.Namespace},
+		Spec: mssqlv1.DatabaseSpec{
+			Server:         serverRef(),
+			DatabaseName:   "schematest",
+			DeletionPolicy: ptr(mssqlv1.DeletionPolicyDelete),
+		},
+	}
+	if err := k8sClient.Create(ctx, db); err != nil && !errors.IsAlreadyExists(err) {
+		t.Fatalf("Failed to create Database CR: %v", err)
+	}
+	waitForReady(t, dbKey, &mssqlv1.Database{})
+
+	t.Run("CreateSchema", func(t *testing.T) {
+		schema := &mssqlv1.Schema{
+			ObjectMeta: metav1.ObjectMeta{Name: schemaKey.Name, Namespace: schemaKey.Namespace},
+			Spec: mssqlv1.SchemaSpec{
+				Server:         serverRef(),
+				DatabaseName:   "schematest",
+				SchemaName:     "app",
+				Owner:          ptr("dbo"),
+				DeletionPolicy: ptr(mssqlv1.DeletionPolicyDelete),
+			},
+		}
+		if err := k8sClient.Create(ctx, schema); err != nil {
+			t.Fatalf("Failed to create Schema CR: %v", err)
+		}
+
+		waitForReady(t, schemaKey, &mssqlv1.Schema{})
+
+		// Verify schema exists on SQL Server
+		exists, err := sqlClient.SchemaExists(ctx, "schematest", "app")
+		if err != nil {
+			t.Fatalf("Failed to check schema existence: %v", err)
+		}
+		if !exists {
+			t.Fatal("Schema 'app' does not exist in database 'schematest'")
+		}
+	})
+
+	t.Run("UpdateSchemaOwner", func(t *testing.T) {
+		var schema mssqlv1.Schema
+		if err := k8sClient.Get(ctx, schemaKey, &schema); err != nil {
+			t.Fatalf("Failed to get Schema: %v", err)
+		}
+		schema.Spec.Owner = ptr("dbo")
+		if err := k8sClient.Update(ctx, &schema); err != nil {
+			t.Fatalf("Failed to update Schema: %v", err)
+		}
+		waitForReady(t, schemaKey, &mssqlv1.Schema{})
+
+		owner, err := sqlClient.GetSchemaOwner(ctx, "schematest", "app")
+		if err != nil {
+			t.Fatalf("Failed to get schema owner: %v", err)
+		}
+		if owner != "dbo" {
+			t.Errorf("Expected schema owner 'dbo', got '%s'", owner)
+		}
+	})
+
+	t.Run("DeleteSchema", func(t *testing.T) {
+		var schema mssqlv1.Schema
+		if err := k8sClient.Get(ctx, schemaKey, &schema); err != nil {
+			t.Fatalf("Failed to get Schema: %v", err)
+		}
+		if err := k8sClient.Delete(ctx, &schema); err != nil {
+			t.Fatalf("Failed to delete Schema CR: %v", err)
+		}
+		waitForDeletion(t, schemaKey, &mssqlv1.Schema{}, pollTimeout)
+
+		// With Delete policy, schema should be dropped
+		exists, err := sqlClient.SchemaExists(ctx, "schematest", "app")
+		if err != nil {
+			t.Fatalf("Failed to check schema existence: %v", err)
+		}
+		if exists {
+			t.Fatal("Schema 'app' should have been dropped with DeletionPolicy=Delete")
+		}
+	})
+
+	// Cleanup
+	_ = k8sClient.Delete(ctx, db)
+}
+
+func TestE2EPermissionLifecycle(t *testing.T) {
+	// Setup: database + login + user for permission tests
+	dbKey := types.NamespacedName{Name: "perm-test-db", Namespace: testNamespace}
+	loginKey := types.NamespacedName{Name: "perm-test-login", Namespace: testNamespace}
+	userKey := types.NamespacedName{Name: "perm-test-user", Namespace: testNamespace}
+	schemaKey := types.NamespacedName{Name: "perm-test-schema", Namespace: testNamespace}
+	permKey := types.NamespacedName{Name: "perm-test-perms", Namespace: testNamespace}
+
+	// Create database
+	db := &mssqlv1.Database{
+		ObjectMeta: metav1.ObjectMeta{Name: dbKey.Name, Namespace: dbKey.Namespace},
+		Spec: mssqlv1.DatabaseSpec{
+			Server:         serverRef(),
+			DatabaseName:   "permtest",
+			DeletionPolicy: ptr(mssqlv1.DeletionPolicyDelete),
+		},
+	}
+	if err := k8sClient.Create(ctx, db); err != nil && !errors.IsAlreadyExists(err) {
+		t.Fatalf("Failed to create Database CR: %v", err)
+	}
+	waitForReady(t, dbKey, &mssqlv1.Database{})
+
+	// Create login
+	pwSecret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: "perm-login-password", Namespace: testNamespace},
+		StringData: map[string]string{"password": "PermP@ss123!"},
+	}
+	if err := k8sClient.Create(ctx, pwSecret); err != nil && !errors.IsAlreadyExists(err) {
+		t.Fatalf("Failed to create password secret: %v", err)
+	}
+
+	login := &mssqlv1.Login{
+		ObjectMeta: metav1.ObjectMeta{Name: loginKey.Name, Namespace: loginKey.Namespace},
+		Spec: mssqlv1.LoginSpec{
+			Server:         serverRef(),
+			LoginName:      "permlogin",
+			PasswordSecret: mssqlv1.SecretReference{Name: "perm-login-password"},
+			DeletionPolicy: ptr(mssqlv1.DeletionPolicyDelete),
+		},
+	}
+	if err := k8sClient.Create(ctx, login); err != nil && !errors.IsAlreadyExists(err) {
+		t.Fatalf("Failed to create Login CR: %v", err)
+	}
+	waitForReady(t, loginKey, &mssqlv1.Login{})
+
+	// Create database user
+	user := &mssqlv1.DatabaseUser{
+		ObjectMeta: metav1.ObjectMeta{Name: userKey.Name, Namespace: userKey.Namespace},
+		Spec: mssqlv1.DatabaseUserSpec{
+			Server:       serverRef(),
+			DatabaseName: "permtest",
+			UserName:     "permuser",
+			LoginRef:     mssqlv1.LoginReference{Name: "perm-test-login"},
+		},
+	}
+	if err := k8sClient.Create(ctx, user); err != nil && !errors.IsAlreadyExists(err) {
+		t.Fatalf("Failed to create DatabaseUser CR: %v", err)
+	}
+	waitForReady(t, userKey, &mssqlv1.DatabaseUser{})
+
+	// Create a schema for permission targets
+	schema := &mssqlv1.Schema{
+		ObjectMeta: metav1.ObjectMeta{Name: schemaKey.Name, Namespace: schemaKey.Namespace},
+		Spec: mssqlv1.SchemaSpec{
+			Server:         serverRef(),
+			DatabaseName:   "permtest",
+			SchemaName:     "appdata",
+			DeletionPolicy: ptr(mssqlv1.DeletionPolicyDelete),
+		},
+	}
+	if err := k8sClient.Create(ctx, schema); err != nil && !errors.IsAlreadyExists(err) {
+		t.Fatalf("Failed to create Schema CR: %v", err)
+	}
+	waitForReady(t, schemaKey, &mssqlv1.Schema{})
+
+	t.Run("GrantPermissions", func(t *testing.T) {
+		perm := &mssqlv1.Permission{
+			ObjectMeta: metav1.ObjectMeta{Name: permKey.Name, Namespace: permKey.Namespace},
+			Spec: mssqlv1.PermissionSpec{
+				Server:       serverRef(),
+				DatabaseName: "permtest",
+				UserName:     "permuser",
+				Grants: []mssqlv1.PermissionEntry{
+					{Permission: "SELECT", On: "SCHEMA::appdata"},
+					{Permission: "INSERT", On: "SCHEMA::appdata"},
+				},
+			},
+		}
+		if err := k8sClient.Create(ctx, perm); err != nil {
+			t.Fatalf("Failed to create Permission CR: %v", err)
+		}
+
+		waitForReady(t, permKey, &mssqlv1.Permission{})
+
+		// Verify permissions on SQL Server
+		perms, err := sqlClient.GetPermissions(ctx, "permtest", "permuser")
+		if err != nil {
+			t.Fatalf("Failed to get permissions: %v", err)
+		}
+		foundSelect := false
+		foundInsert := false
+		for _, p := range perms {
+			if p.Permission == "SELECT" && p.State == "GRANT" {
+				foundSelect = true
+			}
+			if p.Permission == "INSERT" && p.State == "GRANT" {
+				foundInsert = true
+			}
+		}
+		if !foundSelect {
+			t.Error("Expected SELECT GRANT on SCHEMA::appdata")
+		}
+		if !foundInsert {
+			t.Error("Expected INSERT GRANT on SCHEMA::appdata")
+		}
+	})
+
+	t.Run("AddDenyPermission", func(t *testing.T) {
+		var perm mssqlv1.Permission
+		if err := k8sClient.Get(ctx, permKey, &perm); err != nil {
+			t.Fatalf("Failed to get Permission: %v", err)
+		}
+		perm.Spec.Denies = []mssqlv1.PermissionEntry{
+			{Permission: "DELETE", On: "SCHEMA::appdata"},
+		}
+		if err := k8sClient.Update(ctx, &perm); err != nil {
+			t.Fatalf("Failed to update Permission: %v", err)
+		}
+
+		waitForReady(t, permKey, &mssqlv1.Permission{})
+
+		perms, err := sqlClient.GetPermissions(ctx, "permtest", "permuser")
+		if err != nil {
+			t.Fatalf("Failed to get permissions: %v", err)
+		}
+		foundDeny := false
+		for _, p := range perms {
+			if p.Permission == "DELETE" && p.State == "DENY" {
+				foundDeny = true
+			}
+		}
+		if !foundDeny {
+			t.Error("Expected DELETE DENY on SCHEMA::appdata")
+		}
+	})
+
+	t.Run("DeletePermission_RevokesAll", func(t *testing.T) {
+		var perm mssqlv1.Permission
+		if err := k8sClient.Get(ctx, permKey, &perm); err != nil {
+			t.Fatalf("Failed to get Permission: %v", err)
+		}
+		if err := k8sClient.Delete(ctx, &perm); err != nil {
+			t.Fatalf("Failed to delete Permission CR: %v", err)
+		}
+		waitForDeletion(t, permKey, &mssqlv1.Permission{}, pollTimeout)
+
+		// All grants and denies should be revoked
+		perms, err := sqlClient.GetPermissions(ctx, "permtest", "permuser")
+		if err != nil {
+			t.Fatalf("Failed to get permissions: %v", err)
+		}
+		for _, p := range perms {
+			if p.State == "GRANT" || p.State == "DENY" {
+				t.Errorf("Expected all permissions revoked, but found %s %s", p.State, p.Permission)
+			}
+		}
+	})
+
+	// Cleanup
+	_ = k8sClient.Delete(ctx, user)
+	_ = k8sClient.Delete(ctx, schema)
+	_ = k8sClient.Delete(ctx, login)
+	_ = k8sClient.Delete(ctx, db)
+}
+
+// =============================================================================
+// Backup & Restore E2E Tests
+// =============================================================================
+
+func TestE2EBackupRestore(t *testing.T) {
+	// Prerequisite: create a database to back up
+	dbKey := types.NamespacedName{Name: "backup-test-db", Namespace: testNamespace}
+	backupKey := types.NamespacedName{Name: "test-backup", Namespace: testNamespace}
+	restoreKey := types.NamespacedName{Name: "test-restore", Namespace: testNamespace}
+
+	db := &mssqlv1.Database{
+		ObjectMeta: metav1.ObjectMeta{Name: dbKey.Name, Namespace: dbKey.Namespace},
+		Spec: mssqlv1.DatabaseSpec{
+			Server:         serverRef(),
+			DatabaseName:   "backuptest",
+			DeletionPolicy: ptr(mssqlv1.DeletionPolicyDelete),
+		},
+	}
+	if err := k8sClient.Create(ctx, db); err != nil && !errors.IsAlreadyExists(err) {
+		t.Fatalf("Failed to create Database CR: %v", err)
+	}
+	waitForReady(t, dbKey, &mssqlv1.Database{})
+
+	t.Run("CreateBackup_Full", func(t *testing.T) {
+		backup := &mssqlv1.Backup{
+			ObjectMeta: metav1.ObjectMeta{Name: backupKey.Name, Namespace: backupKey.Namespace},
+			Spec: mssqlv1.BackupSpec{
+				Server:      serverRef(),
+				DatabaseName: "backuptest",
+				Destination: "/var/opt/mssql/backup/backuptest.bak",
+				Type:        mssqlv1.BackupTypeFull,
+				Compression: ptr(true),
+			},
+		}
+		if err := k8sClient.Create(ctx, backup); err != nil {
+			t.Fatalf("Failed to create Backup CR: %v", err)
+		}
+
+		bak := waitForBackupPhase(t, backupKey, mssqlv1.BackupPhaseCompleted, pollTimeout)
+
+		// Verify status fields
+		if bak.Status.StartTime == nil {
+			t.Error("Expected StartTime to be set")
+		}
+		if bak.Status.CompletionTime == nil {
+			t.Error("Expected CompletionTime to be set")
+		}
+		if bak.Status.CompletionTime != nil && bak.Status.StartTime != nil {
+			if bak.Status.CompletionTime.Before(bak.Status.StartTime) {
+				t.Error("CompletionTime should not be before StartTime")
+			}
+		}
+
+		// Verify Ready condition
+		cond := findCondition(bak, mssqlv1.ConditionReady)
+		if cond == nil || cond.Status != metav1.ConditionTrue {
+			t.Error("Expected Ready=True condition on completed backup")
+		}
+	})
+
+	t.Run("BackupImmutable", func(t *testing.T) {
+		var bak mssqlv1.Backup
+		if err := k8sClient.Get(ctx, backupKey, &bak); err != nil {
+			t.Fatalf("Failed to get Backup: %v", err)
+		}
+		bak.Spec.DatabaseName = "othername"
+		err := k8sClient.Update(ctx, &bak)
+		if err == nil {
+			t.Error("Expected update to be rejected (immutable spec)")
+		}
+	})
+
+	t.Run("RestoreDatabase", func(t *testing.T) {
+		// Drop the original database first so restore can recreate it
+		_ = k8sClient.Delete(ctx, db)
+		waitForDeletion(t, dbKey, &mssqlv1.Database{}, pollTimeout)
+
+		// Wait for the DB to actually be dropped on SQL Server
+		err := wait.PollUntilContextTimeout(ctx, pollInterval, pollTimeout, true, func(ctx context.Context) (bool, error) {
+			exists, err := sqlClient.DatabaseExists(ctx, "backuptest")
+			if err != nil {
+				return false, nil
+			}
+			return !exists, nil
+		})
+		if err != nil {
+			t.Fatalf("Timed out waiting for database to be dropped: %v", err)
+		}
+
+		restore := &mssqlv1.Restore{
+			ObjectMeta: metav1.ObjectMeta{Name: restoreKey.Name, Namespace: restoreKey.Namespace},
+			Spec: mssqlv1.RestoreSpec{
+				Server:       serverRef(),
+				DatabaseName: "backuptest",
+				Source:       "/var/opt/mssql/backup/backuptest.bak",
+			},
+		}
+		if err := k8sClient.Create(ctx, restore); err != nil {
+			t.Fatalf("Failed to create Restore CR: %v", err)
+		}
+
+		rst := waitForRestorePhase(t, restoreKey, mssqlv1.RestorePhaseCompleted, pollTimeout)
+
+		// Verify status
+		if rst.Status.StartTime == nil {
+			t.Error("Expected StartTime to be set")
+		}
+		if rst.Status.CompletionTime == nil {
+			t.Error("Expected CompletionTime to be set")
+		}
+
+		// Verify database exists again
+		exists, err := sqlClient.DatabaseExists(ctx, "backuptest")
+		if err != nil {
+			t.Fatalf("Failed to check database existence: %v", err)
+		}
+		if !exists {
+			t.Fatal("Database 'backuptest' should exist after restore")
+		}
+	})
+
+	t.Run("RestoreImmutable", func(t *testing.T) {
+		var rst mssqlv1.Restore
+		if err := k8sClient.Get(ctx, restoreKey, &rst); err != nil {
+			t.Fatalf("Failed to get Restore: %v", err)
+		}
+		rst.Spec.DatabaseName = "othername"
+		err := k8sClient.Update(ctx, &rst)
+		if err == nil {
+			t.Error("Expected update to be rejected (immutable spec)")
+		}
+	})
+
+	// Cleanup
+	_ = k8sClient.Delete(ctx, &mssqlv1.Backup{ObjectMeta: metav1.ObjectMeta{Name: backupKey.Name, Namespace: backupKey.Namespace}})
+	_ = k8sClient.Delete(ctx, &mssqlv1.Restore{ObjectMeta: metav1.ObjectMeta{Name: restoreKey.Name, Namespace: restoreKey.Namespace}})
+	// Drop the restored database via raw SQL
+	execRawSQL(t, "master", "IF DB_ID('backuptest') IS NOT NULL DROP DATABASE [backuptest]")
+}
+
+func TestE2EBackupFailure_NonExistentDB(t *testing.T) {
+	key := types.NamespacedName{Name: "backup-fail-nodb", Namespace: testNamespace}
+
+	backup := &mssqlv1.Backup{
+		ObjectMeta: metav1.ObjectMeta{Name: key.Name, Namespace: key.Namespace},
+		Spec: mssqlv1.BackupSpec{
+			Server:       serverRef(),
+			DatabaseName: "nonexistent_db_xyz",
+			Destination:  "/var/opt/mssql/backup/fail.bak",
+			Type:         mssqlv1.BackupTypeFull,
+		},
+	}
+	if err := k8sClient.Create(ctx, backup); err != nil {
+		t.Fatalf("Failed to create Backup CR: %v", err)
+	}
+
+	bak := waitForBackupPhase(t, key, mssqlv1.BackupPhaseFailed, pollTimeout)
+
+	cond := findCondition(bak, mssqlv1.ConditionReady)
+	if cond == nil || cond.Status != metav1.ConditionFalse {
+		t.Error("Expected Ready=False condition on failed backup")
+	}
+
+	// Cleanup
+	_ = k8sClient.Delete(ctx, backup)
+}
+
+// =============================================================================
+// AvailabilityGroup & AGFailover E2E Tests
+// =============================================================================
+//
+// AG tests require multiple SQL Server instances with HADR enabled.
+// They are skipped in the standard e2e suite (single-instance) and require
+// the E2E_AG_ENABLED=true environment variable plus a multi-instance setup.
+//
+// To run AG e2e tests:
+//   1. Deploy 2+ SQL Server Enterprise instances with HADR enabled
+//   2. Set E2E_AG_ENABLED=true
+//   3. Set E2E_SQL_HOST_0, E2E_SQL_HOST_1 for the replica hostnames
+//   4. Set E2E_AG_CREDS_SECRET for the credentials secret name
+
+func TestE2EAvailabilityGroup(t *testing.T) {
+	if os.Getenv("E2E_AG_ENABLED") != "true" {
+		t.Skip("Skipping AG e2e tests: set E2E_AG_ENABLED=true with a multi-instance SQL Server setup")
+	}
+
+	host0 := os.Getenv("E2E_SQL_HOST_0")
+	host1 := os.Getenv("E2E_SQL_HOST_1")
+	credsSecret := envOrDefault("E2E_AG_CREDS_SECRET", "mssql-sa-credentials")
+
+	if host0 == "" || host1 == "" {
+		t.Fatal("E2E_SQL_HOST_0 and E2E_SQL_HOST_1 must be set for AG tests")
+	}
+
+	agKey := types.NamespacedName{Name: "test-ag", Namespace: testNamespace}
+
+	t.Run("CreateAG", func(t *testing.T) {
+		ag := &mssqlv1.AvailabilityGroup{
+			ObjectMeta: metav1.ObjectMeta{Name: agKey.Name, Namespace: agKey.Namespace},
+			Spec: mssqlv1.AvailabilityGroupSpec{
+				AGName: "e2eag",
+				Replicas: []mssqlv1.AGReplicaSpec{
+					{
+						ServerName:       "sql-0",
+						EndpointURL:      fmt.Sprintf("TCP://%s:5022", host0),
+						AvailabilityMode: mssqlv1.AvailabilityModeSynchronous,
+						FailoverMode:     mssqlv1.FailoverModeAutomatic,
+						SeedingMode:      mssqlv1.SeedingModeAutomatic,
+						Server: mssqlv1.ServerReference{
+							Host:              host0,
+							Port:              ptr(int32(1433)),
+							CredentialsSecret: mssqlv1.SecretReference{Name: credsSecret},
+						},
+					},
+					{
+						ServerName:       "sql-1",
+						EndpointURL:      fmt.Sprintf("TCP://%s:5022", host1),
+						AvailabilityMode: mssqlv1.AvailabilityModeSynchronous,
+						FailoverMode:     mssqlv1.FailoverModeAutomatic,
+						SeedingMode:      mssqlv1.SeedingModeAutomatic,
+						Server: mssqlv1.ServerReference{
+							Host:              host1,
+							Port:              ptr(int32(1433)),
+							CredentialsSecret: mssqlv1.SecretReference{Name: credsSecret},
+						},
+					},
+				},
+				AutomatedBackupPreference: ptr("Secondary"),
+				DBFailover:                ptr(true),
+			},
+		}
+		if err := k8sClient.Create(ctx, ag); err != nil {
+			t.Fatalf("Failed to create AvailabilityGroup CR: %v", err)
+		}
+
+		waitForReady(t, agKey, &mssqlv1.AvailabilityGroup{})
+
+		// Verify status shows primary
+		var updated mssqlv1.AvailabilityGroup
+		if err := k8sClient.Get(ctx, agKey, &updated); err != nil {
+			t.Fatalf("Failed to get AG: %v", err)
+		}
+		if updated.Status.PrimaryReplica == "" {
+			t.Error("Expected primaryReplica to be set in status")
+		}
+		if len(updated.Status.Replicas) != 2 {
+			t.Errorf("Expected 2 replica statuses, got %d", len(updated.Status.Replicas))
+		}
+	})
+
+	t.Run("ManualFailover", func(t *testing.T) {
+		foKey := types.NamespacedName{Name: "test-ag-failover", Namespace: testNamespace}
+		failover := &mssqlv1.AGFailover{
+			ObjectMeta: metav1.ObjectMeta{Name: foKey.Name, Namespace: foKey.Namespace},
+			Spec: mssqlv1.AGFailoverSpec{
+				AGName:        "e2eag",
+				TargetReplica: "sql-1",
+				Force:         ptr(false),
+				Server: mssqlv1.ServerReference{
+					Host:              host1,
+					Port:              ptr(int32(1433)),
+					CredentialsSecret: mssqlv1.SecretReference{Name: credsSecret},
+				},
+			},
+		}
+		if err := k8sClient.Create(ctx, failover); err != nil {
+			t.Fatalf("Failed to create AGFailover CR: %v", err)
+		}
+
+		// Wait for failover to complete
+		err := wait.PollUntilContextTimeout(ctx, pollInterval, pollTimeout, true, func(ctx context.Context) (bool, error) {
+			var fo mssqlv1.AGFailover
+			if err := k8sClient.Get(ctx, foKey, &fo); err != nil {
+				return false, nil
+			}
+			return fo.Status.Phase == mssqlv1.FailoverPhaseCompleted || fo.Status.Phase == mssqlv1.FailoverPhaseFailed, nil
+		})
+		if err != nil {
+			t.Fatalf("Timed out waiting for AGFailover to complete")
+		}
+
+		var fo mssqlv1.AGFailover
+		if err := k8sClient.Get(ctx, foKey, &fo); err != nil {
+			t.Fatalf("Failed to get AGFailover: %v", err)
+		}
+		if fo.Status.Phase != mssqlv1.FailoverPhaseCompleted {
+			t.Errorf("Expected AGFailover phase=Completed, got %s", fo.Status.Phase)
+		}
+		if fo.Status.NewPrimary != "sql-1" {
+			t.Errorf("Expected newPrimary=sql-1, got %s", fo.Status.NewPrimary)
+		}
+
+		// Cleanup failover CR
+		_ = k8sClient.Delete(ctx, failover)
+	})
+
+	// Cleanup AG
+	var ag mssqlv1.AvailabilityGroup
+	if err := k8sClient.Get(ctx, agKey, &ag); err == nil {
+		_ = k8sClient.Delete(ctx, &ag)
+	}
 }
 
 // --- Additional helpers ---
