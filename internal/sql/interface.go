@@ -70,6 +70,22 @@ type SQLClient interface {
 	CreateHADREndpoint(ctx context.Context, port int) error
 	HADREndpointExists(ctx context.Context) (bool, error)
 
+	// Server info
+	GetServerVersion(ctx context.Context) (string, error)
+	GetServerEdition(ctx context.Context) (string, error)
+
+	// Database configuration
+	GetDatabaseRecoveryModel(ctx context.Context, name string) (string, error)
+	SetDatabaseRecoveryModel(ctx context.Context, name, model string) error
+	GetDatabaseCompatibilityLevel(ctx context.Context, name string) (int, error)
+	SetDatabaseCompatibilityLevel(ctx context.Context, name string, level int) error
+	GetDatabaseOption(ctx context.Context, name, option string) (bool, error)
+	SetDatabaseOption(ctx context.Context, name, option string, value bool) error
+
+	// Point-in-Time Restore
+	RestoreDatabasePIT(ctx context.Context, dbName, source, stopAt string) error
+	RestoreDatabaseWithMove(ctx context.Context, dbName, source string, withMove map[string]string) error
+
 	// Connection
 	Close() error
 	Ping(ctx context.Context) error
@@ -139,3 +155,9 @@ type PermissionState struct {
 
 // ClientFactory creates a SQLClient for the given connection parameters.
 type ClientFactory func(host string, port int, username, password string, tlsEnabled bool) (SQLClient, error)
+
+// AzureADClientFactory creates a SQLClient using Azure AD token-based authentication.
+type AzureADClientFactory func(host string, port int, clientID, tenantID, clientSecret string, tlsEnabled bool) (SQLClient, error)
+
+// ManagedIdentityClientFactory creates a SQLClient using Azure Managed Identity.
+type ManagedIdentityClientFactory func(host string, port int, clientID string, tlsEnabled bool) (SQLClient, error)

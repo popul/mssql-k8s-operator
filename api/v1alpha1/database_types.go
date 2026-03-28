@@ -4,6 +4,26 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
+// RecoveryModel defines the SQL Server recovery model for a database.
+// +kubebuilder:validation:Enum=Full;Simple;BulkLogged
+type RecoveryModel string
+
+const (
+	RecoveryModelFull       RecoveryModel = "Full"
+	RecoveryModelSimple     RecoveryModel = "Simple"
+	RecoveryModelBulkLogged RecoveryModel = "BulkLogged"
+)
+
+// DatabaseOption represents a boolean database option (SET ON/OFF).
+type DatabaseOption struct {
+	// Name is the database option name (e.g. ALLOW_SNAPSHOT_ISOLATION, READ_COMMITTED_SNAPSHOT).
+	// +kubebuilder:validation:MinLength=1
+	Name string `json:"name"`
+
+	// Value enables or disables the option.
+	Value bool `json:"value"`
+}
+
 // DatabaseSpec defines the desired state of a SQL Server database.
 type DatabaseSpec struct {
 	// Server defines the SQL Server connection details.
@@ -20,6 +40,21 @@ type DatabaseSpec struct {
 	// Owner sets the database owner (ALTER AUTHORIZATION).
 	// +optional
 	Owner *string `json:"owner,omitempty"`
+
+	// RecoveryModel sets the database recovery model (Full, Simple, BulkLogged).
+	// Full is required for transaction log backups and point-in-time restore.
+	// +optional
+	RecoveryModel *RecoveryModel `json:"recoveryModel,omitempty"`
+
+	// CompatibilityLevel sets the database compatibility level (e.g. 160 for SQL 2022).
+	// +optional
+	// +kubebuilder:validation:Minimum=100
+	// +kubebuilder:validation:Maximum=170
+	CompatibilityLevel *int32 `json:"compatibilityLevel,omitempty"`
+
+	// Options sets database-level options (e.g. ALLOW_SNAPSHOT_ISOLATION).
+	// +optional
+	Options []DatabaseOption `json:"options,omitempty"`
 
 	// DeletionPolicy determines whether to DROP or RETAIN the database on CR deletion.
 	// +optional

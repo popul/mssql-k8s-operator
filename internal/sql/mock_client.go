@@ -8,9 +8,12 @@ import (
 
 // MockDatabase represents a database in the mock.
 type MockDatabase struct {
-	Name      string
-	Collation string
-	Owner     string
+	Name               string
+	Collation          string
+	Owner              string
+	RecoveryModel      string
+	CompatibilityLevel int
+	Options            map[string]bool
 }
 
 // MockLogin represents a login in the mock.
@@ -1041,6 +1044,181 @@ func (m *MockClient) RestoreDatabase(_ context.Context, dbName, source string) e
 		return err
 	}
 	if err := m.checkMethodError("RestoreDatabase"); err != nil {
+		return err
+	}
+	return nil
+}
+
+// --- Server info ---
+
+func (m *MockClient) GetServerVersion(_ context.Context) (string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.track("GetServerVersion")
+	if err := m.checkConnect(); err != nil {
+		return "", err
+	}
+	if err := m.checkMethodError("GetServerVersion"); err != nil {
+		return "", err
+	}
+	return "16.0.4135.4", nil
+}
+
+func (m *MockClient) GetServerEdition(_ context.Context) (string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.track("GetServerEdition")
+	if err := m.checkConnect(); err != nil {
+		return "", err
+	}
+	if err := m.checkMethodError("GetServerEdition"); err != nil {
+		return "", err
+	}
+	return "Developer Edition (64-bit)", nil
+}
+
+// --- Database configuration ---
+
+func (m *MockClient) GetDatabaseRecoveryModel(_ context.Context, name string) (string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.track("GetDatabaseRecoveryModel")
+	if err := m.checkConnect(); err != nil {
+		return "", err
+	}
+	if err := m.checkMethodError("GetDatabaseRecoveryModel"); err != nil {
+		return "", err
+	}
+	db, ok := m.databases[name]
+	if !ok {
+		return "", fmt.Errorf("database %q not found", name)
+	}
+	if db.RecoveryModel == "" {
+		return "FULL", nil
+	}
+	return db.RecoveryModel, nil
+}
+
+func (m *MockClient) SetDatabaseRecoveryModel(_ context.Context, name, model string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.track("SetDatabaseRecoveryModel")
+	if err := m.checkConnect(); err != nil {
+		return err
+	}
+	if err := m.checkMethodError("SetDatabaseRecoveryModel"); err != nil {
+		return err
+	}
+	db, ok := m.databases[name]
+	if !ok {
+		return fmt.Errorf("database %q not found", name)
+	}
+	db.RecoveryModel = model
+	return nil
+}
+
+func (m *MockClient) GetDatabaseCompatibilityLevel(_ context.Context, name string) (int, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.track("GetDatabaseCompatibilityLevel")
+	if err := m.checkConnect(); err != nil {
+		return 0, err
+	}
+	if err := m.checkMethodError("GetDatabaseCompatibilityLevel"); err != nil {
+		return 0, err
+	}
+	db, ok := m.databases[name]
+	if !ok {
+		return 0, fmt.Errorf("database %q not found", name)
+	}
+	if db.CompatibilityLevel == 0 {
+		return 160, nil
+	}
+	return db.CompatibilityLevel, nil
+}
+
+func (m *MockClient) SetDatabaseCompatibilityLevel(_ context.Context, name string, level int) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.track("SetDatabaseCompatibilityLevel")
+	if err := m.checkConnect(); err != nil {
+		return err
+	}
+	if err := m.checkMethodError("SetDatabaseCompatibilityLevel"); err != nil {
+		return err
+	}
+	db, ok := m.databases[name]
+	if !ok {
+		return fmt.Errorf("database %q not found", name)
+	}
+	db.CompatibilityLevel = level
+	return nil
+}
+
+func (m *MockClient) GetDatabaseOption(_ context.Context, name, option string) (bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.track("GetDatabaseOption")
+	if err := m.checkConnect(); err != nil {
+		return false, err
+	}
+	if err := m.checkMethodError("GetDatabaseOption"); err != nil {
+		return false, err
+	}
+	db, ok := m.databases[name]
+	if !ok {
+		return false, fmt.Errorf("database %q not found", name)
+	}
+	if db.Options == nil {
+		return false, nil
+	}
+	return db.Options[option], nil
+}
+
+func (m *MockClient) SetDatabaseOption(_ context.Context, name, option string, value bool) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.track("SetDatabaseOption")
+	if err := m.checkConnect(); err != nil {
+		return err
+	}
+	if err := m.checkMethodError("SetDatabaseOption"); err != nil {
+		return err
+	}
+	db, ok := m.databases[name]
+	if !ok {
+		return fmt.Errorf("database %q not found", name)
+	}
+	if db.Options == nil {
+		db.Options = make(map[string]bool)
+	}
+	db.Options[option] = value
+	return nil
+}
+
+// --- Point-in-Time Restore ---
+
+func (m *MockClient) RestoreDatabasePIT(_ context.Context, dbName, source, stopAt string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.track("RestoreDatabasePIT")
+	if err := m.checkConnect(); err != nil {
+		return err
+	}
+	if err := m.checkMethodError("RestoreDatabasePIT"); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (m *MockClient) RestoreDatabaseWithMove(_ context.Context, dbName, source string, withMove map[string]string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.track("RestoreDatabaseWithMove")
+	if err := m.checkConnect(); err != nil {
+		return err
+	}
+	if err := m.checkMethodError("RestoreDatabaseWithMove"); err != nil {
 		return err
 	}
 	return nil

@@ -160,5 +160,36 @@ func (c *interfaceChecker) HADREndpointExists(ctx context.Context) (bool, error)
 	return false, nil
 }
 
+func (c *interfaceChecker) GetServerVersion(ctx context.Context) (string, error) {
+	return "", nil
+}
+func (c *interfaceChecker) GetServerEdition(ctx context.Context) (string, error) {
+	return "", nil
+}
+func (c *interfaceChecker) GetDatabaseRecoveryModel(ctx context.Context, name string) (string, error) {
+	return "", nil
+}
+func (c *interfaceChecker) SetDatabaseRecoveryModel(ctx context.Context, name, model string) error {
+	return nil
+}
+func (c *interfaceChecker) GetDatabaseCompatibilityLevel(ctx context.Context, name string) (int, error) {
+	return 0, nil
+}
+func (c *interfaceChecker) SetDatabaseCompatibilityLevel(ctx context.Context, name string, level int) error {
+	return nil
+}
+func (c *interfaceChecker) GetDatabaseOption(ctx context.Context, name, option string) (bool, error) {
+	return false, nil
+}
+func (c *interfaceChecker) SetDatabaseOption(ctx context.Context, name, option string, value bool) error {
+	return nil
+}
+func (c *interfaceChecker) RestoreDatabasePIT(ctx context.Context, dbName, source, stopAt string) error {
+	return nil
+}
+func (c *interfaceChecker) RestoreDatabaseWithMove(ctx context.Context, dbName, source string, withMove map[string]string) error {
+	return nil
+}
+
 func (c *interfaceChecker) Close() error                   { return nil }
 func (c *interfaceChecker) Ping(ctx context.Context) error { return nil }

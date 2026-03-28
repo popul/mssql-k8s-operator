@@ -129,6 +129,71 @@ func (r *DatabaseReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 		}
 	}
 
+	// Reconcile recovery model
+	if db.Spec.RecoveryModel != nil && exists {
+		sqlCtxRM, cancelRM := sqlContext(ctx)
+		defer cancelRM()
+		currentRM, err := sqlClient.GetDatabaseRecoveryModel(sqlCtxRM, db.Spec.DatabaseName)
+		if err != nil {
+			return ctrl.Result{}, fmt.Errorf("failed to get recovery model: %w", err)
+		}
+		desiredRM := string(*db.Spec.RecoveryModel)
+		// SQL Server returns "FULL", "SIMPLE", "BULK_LOGGED"
+		desiredRMSQL := desiredRM
+		if desiredRM == "BulkLogged" {
+			desiredRMSQL = "BULK_LOGGED"
+		}
+		if currentRM != desiredRMSQL {
+			sqlCtxRM2, cancelRM2 := sqlContext(ctx)
+			defer cancelRM2()
+			if err := sqlClient.SetDatabaseRecoveryModel(sqlCtxRM2, db.Spec.DatabaseName, desiredRMSQL); err != nil {
+				return ctrl.Result{}, fmt.Errorf("failed to set recovery model: %w", err)
+			}
+			r.Recorder.Eventf(&db, corev1.EventTypeNormal, "RecoveryModelUpdated",
+				"Database %s recovery model set to %s", db.Spec.DatabaseName, desiredRM)
+		}
+	}
+
+	// Reconcile compatibility level
+	if db.Spec.CompatibilityLevel != nil && exists {
+		sqlCtxCL, cancelCL := sqlContext(ctx)
+		defer cancelCL()
+		currentCL, err := sqlClient.GetDatabaseCompatibilityLevel(sqlCtxCL, db.Spec.DatabaseName)
+		if err != nil {
+			return ctrl.Result{}, fmt.Errorf("failed to get compatibility level: %w", err)
+		}
+		desiredCL := int(*db.Spec.CompatibilityLevel)
+		if currentCL != desiredCL {
+			sqlCtxCL2, cancelCL2 := sqlContext(ctx)
+			defer cancelCL2()
+			if err := sqlClient.SetDatabaseCompatibilityLevel(sqlCtxCL2, db.Spec.DatabaseName, desiredCL); err != nil {
+				return ctrl.Result{}, fmt.Errorf("failed to set compatibility level: %w", err)
+			}
+			r.Recorder.Eventf(&db, corev1.EventTypeNormal, "CompatibilityLevelUpdated",
+				"Database %s compatibility level set to %d", db.Spec.DatabaseName, desiredCL)
+		}
+	}
+
+	// Reconcile database options
+	for _, opt := range db.Spec.Options {
+		sqlCtxOpt, cancelOpt := sqlContext(ctx)
+		currentVal, err := sqlClient.GetDatabaseOption(sqlCtxOpt, db.Spec.DatabaseName, opt.Name)
+		cancelOpt()
+		if err != nil {
+			return ctrl.Result{}, fmt.Errorf("failed to get database option %s: %w", opt.Name, err)
+		}
+		if currentVal != opt.Value {
+			sqlCtxOpt2, cancelOpt2 := sqlContext(ctx)
+			if err := sqlClient.SetDatabaseOption(sqlCtxOpt2, db.Spec.DatabaseName, opt.Name, opt.Value); err != nil {
+				cancelOpt2()
+				return ctrl.Result{}, fmt.Errorf("failed to set database option %s: %w", opt.Name, err)
+			}
+			cancelOpt2()
+			r.Recorder.Eventf(&db, corev1.EventTypeNormal, "DatabaseOptionUpdated",
+				"Database %s option %s set to %v", db.Spec.DatabaseName, opt.Name, opt.Value)
+		}
+	}
+
 	// Check collation drift (immutable after creation)
 	if db.Spec.Collation != nil && exists {
 		sqlCtx5, cancel5 := sqlContext(ctx)

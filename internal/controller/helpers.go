@@ -224,6 +224,29 @@ func mapSecretToAGs(ctx context.Context, c client.Client) func(context.Context, 
 	}
 }
 
+// resolveServerReference resolves a ServerReference. If sqlServerRef is set, it fetches
+// the SQLServer CR and returns the equivalent inline ServerReference. Otherwise returns as-is.
+func resolveServerReference(ctx context.Context, c client.Client, namespace string, ref v1alpha1.ServerReference) (v1alpha1.ServerReference, error) {
+	if ref.SQLServerRef == nil {
+		return ref, nil
+	}
+	var srv v1alpha1.SQLServer
+	if err := c.Get(ctx, types.NamespacedName{Name: *ref.SQLServerRef, Namespace: namespace}, &srv); err != nil {
+		return ref, fmt.Errorf("failed to resolve SQLServer %q: %w", *ref.SQLServerRef, err)
+	}
+	resolved := v1alpha1.ServerReference{
+		Host: srv.Spec.Host,
+		Port: srv.Spec.Port,
+		TLS:  srv.Spec.TLS,
+	}
+	if srv.Spec.CredentialsSecret != nil {
+		resolved.CredentialsSecret = v1alpha1.SecretReference{
+			Name: srv.Spec.CredentialsSecret.Name,
+		}
+	}
+	return resolved, nil
+}
+
 // requeueWithJitter returns a RequeueAfter duration with ±20% jitter to avoid thundering herd.
 func requeueWithJitter(base time.Duration) time.Duration {
 	jitter := time.Duration(rand.Int63n(int64(base*2/5))) - base/5

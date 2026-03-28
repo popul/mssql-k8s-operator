@@ -347,3 +347,105 @@ func TestDatabaseReconcile_AdoptExisting(t *testing.T) {
 		t.Error("expected CreateDatabase NOT to be called for existing database")
 	}
 }
+
+// --- Test: Recovery model reconciliation ---
+func TestDatabaseReconcile_RecoveryModel(t *testing.T) {
+	mockSQL := sqlclient.NewMockClient()
+	rm := v1alpha1.RecoveryModelSimple
+	db := testDatabase("mydb", nil)
+	db.Spec.RecoveryModel = &rm
+
+	r, _ := newTestDatabaseReconciler([]runtime.Object{db, saSecret()}, mockSQL)
+
+	// First reconcile creates the DB
+	_, err := r.Reconcile(context.Background(), reqFor("mydb"))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	// Second reconcile sets recovery model
+	_, err = r.Reconcile(context.Background(), reqFor("mydb"))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if !mockSQL.WasCalled("SetDatabaseRecoveryModel") {
+		t.Error("expected SetDatabaseRecoveryModel to be called")
+	}
+}
+
+// --- Test: Compatibility level reconciliation ---
+func TestDatabaseReconcile_CompatibilityLevel(t *testing.T) {
+	mockSQL := sqlclient.NewMockClient()
+	cl := int32(150)
+	db := testDatabase("mydb", nil)
+	db.Spec.CompatibilityLevel = &cl
+
+	r, _ := newTestDatabaseReconciler([]runtime.Object{db, saSecret()}, mockSQL)
+
+	// First reconcile creates DB
+	_, err := r.Reconcile(context.Background(), reqFor("mydb"))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	// Second reconcile sets compat level
+	_, err = r.Reconcile(context.Background(), reqFor("mydb"))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if !mockSQL.WasCalled("SetDatabaseCompatibilityLevel") {
+		t.Error("expected SetDatabaseCompatibilityLevel to be called")
+	}
+}
+
+// --- Test: Database options reconciliation ---
+func TestDatabaseReconcile_Options(t *testing.T) {
+	mockSQL := sqlclient.NewMockClient()
+	db := testDatabase("mydb", nil)
+	db.Spec.Options = []v1alpha1.DatabaseOption{
+		{Name: "ALLOW_SNAPSHOT_ISOLATION", Value: true},
+		{Name: "READ_COMMITTED_SNAPSHOT", Value: true},
+	}
+
+	r, _ := newTestDatabaseReconciler([]runtime.Object{db, saSecret()}, mockSQL)
+
+	// First reconcile creates DB
+	_, err := r.Reconcile(context.Background(), reqFor("mydb"))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	// Second reconcile sets options
+	_, err = r.Reconcile(context.Background(), reqFor("mydb"))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if mockSQL.CallCount("SetDatabaseOption") != 2 {
+		t.Errorf("expected 2 calls to SetDatabaseOption, got %d", mockSQL.CallCount("SetDatabaseOption"))
+	}
+}
+
+// --- Test: Recovery model idempotent ---
+func TestDatabaseReconcile_RecoveryModel_Idempotent(t *testing.T) {
+	mockSQL := sqlclient.NewMockClient()
+	// Pre-create database with Simple recovery model
+	mockSQL.CreateDatabase(context.Background(), "mydb", nil)
+	mockSQL.SetDatabaseRecoveryModel(context.Background(), "mydb", "Simple")
+	mockSQL.ResetCalls()
+
+	rm := v1alpha1.RecoveryModelSimple
+	db := testDatabase("mydb", nil)
+	db.Spec.RecoveryModel = &rm
+
+	r, _ := newTestDatabaseReconciler([]runtime.Object{db, saSecret()}, mockSQL)
+
+	_, err := r.Reconcile(context.Background(), reqFor("mydb"))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Should NOT have called SetDatabaseRecoveryModel since it's already Simple
+	if mockSQL.WasCalled("SetDatabaseRecoveryModel") {
+		t.Error("expected SetDatabaseRecoveryModel NOT to be called when already matching")
+	}
+}

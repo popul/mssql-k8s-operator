@@ -755,6 +755,121 @@ func (c *MSSQLClient) RestoreDatabase(ctx context.Context, dbName, source string
 	return nil
 }
 
+// --- Server info ---
+
+func (c *MSSQLClient) GetServerVersion(ctx context.Context) (string, error) {
+	var version string
+	err := c.db.QueryRowContext(ctx, "SELECT SERVERPROPERTY('ProductVersion')").Scan(&version)
+	if err != nil {
+		return "", fmt.Errorf("failed to get server version: %w", err)
+	}
+	return version, nil
+}
+
+func (c *MSSQLClient) GetServerEdition(ctx context.Context) (string, error) {
+	var edition string
+	err := c.db.QueryRowContext(ctx, "SELECT SERVERPROPERTY('Edition')").Scan(&edition)
+	if err != nil {
+		return "", fmt.Errorf("failed to get server edition: %w", err)
+	}
+	return edition, nil
+}
+
+// --- Database configuration ---
+
+func (c *MSSQLClient) GetDatabaseRecoveryModel(ctx context.Context, name string) (string, error) {
+	var model string
+	query := fmt.Sprintf("SELECT recovery_model_desc FROM sys.databases WHERE name = %s", QuoteString(name))
+	err := c.db.QueryRowContext(ctx, query).Scan(&model)
+	if err != nil {
+		return "", fmt.Errorf("failed to get recovery model for %s: %w", name, err)
+	}
+	return model, nil
+}
+
+func (c *MSSQLClient) SetDatabaseRecoveryModel(ctx context.Context, name, model string) error {
+	query := fmt.Sprintf("ALTER DATABASE %s SET RECOVERY %s", QuoteName(name), model)
+	_, err := c.db.ExecContext(ctx, query)
+	if err != nil {
+		return fmt.Errorf("failed to set recovery model for %s: %w", name, err)
+	}
+	return nil
+}
+
+func (c *MSSQLClient) GetDatabaseCompatibilityLevel(ctx context.Context, name string) (int, error) {
+	var level int
+	query := fmt.Sprintf("SELECT compatibility_level FROM sys.databases WHERE name = %s", QuoteString(name))
+	err := c.db.QueryRowContext(ctx, query).Scan(&level)
+	if err != nil {
+		return 0, fmt.Errorf("failed to get compatibility level for %s: %w", name, err)
+	}
+	return level, nil
+}
+
+func (c *MSSQLClient) SetDatabaseCompatibilityLevel(ctx context.Context, name string, level int) error {
+	query := fmt.Sprintf("ALTER DATABASE %s SET COMPATIBILITY_LEVEL = %d", QuoteName(name), level)
+	_, err := c.db.ExecContext(ctx, query)
+	if err != nil {
+		return fmt.Errorf("failed to set compatibility level for %s: %w", name, err)
+	}
+	return nil
+}
+
+func (c *MSSQLClient) GetDatabaseOption(ctx context.Context, name, option string) (bool, error) {
+	query := fmt.Sprintf("SELECT DATABASEPROPERTYEX(%s, %s)", QuoteString(name), QuoteString(option))
+	var val interface{}
+	err := c.db.QueryRowContext(ctx, query).Scan(&val)
+	if err != nil {
+		return false, fmt.Errorf("failed to get database option %s for %s: %w", option, name, err)
+	}
+	// DATABASEPROPERTYEX returns various types; for boolean options it returns 1/0
+	switch v := val.(type) {
+	case int64:
+		return v == 1, nil
+	case string:
+		return strings.EqualFold(v, "TRUE") || v == "1", nil
+	}
+	return false, nil
+}
+
+func (c *MSSQLClient) SetDatabaseOption(ctx context.Context, name, option string, value bool) error {
+	valStr := "OFF"
+	if value {
+		valStr = "ON"
+	}
+	query := fmt.Sprintf("ALTER DATABASE %s SET %s %s", QuoteName(name), option, valStr)
+	_, err := c.db.ExecContext(ctx, query)
+	if err != nil {
+		return fmt.Errorf("failed to set database option %s for %s: %w", option, name, err)
+	}
+	return nil
+}
+
+// --- Point-in-Time Restore ---
+
+func (c *MSSQLClient) RestoreDatabasePIT(ctx context.Context, dbName, source, stopAt string) error {
+	query := fmt.Sprintf("RESTORE DATABASE %s FROM DISK = %s WITH REPLACE, STOPAT = %s",
+		QuoteName(dbName), QuoteString(source), QuoteString(stopAt))
+	_, err := c.db.ExecContext(ctx, query)
+	if err != nil {
+		return fmt.Errorf("failed to restore database %s to point-in-time %s: %w", dbName, stopAt, err)
+	}
+	return nil
+}
+
+func (c *MSSQLClient) RestoreDatabaseWithMove(ctx context.Context, dbName, source string, withMove map[string]string) error {
+	parts := []string{fmt.Sprintf("RESTORE DATABASE %s FROM DISK = %s WITH REPLACE", QuoteName(dbName), QuoteString(source))}
+	for logicalName, physicalPath := range withMove {
+		parts = append(parts, fmt.Sprintf("MOVE %s TO %s", QuoteString(logicalName), QuoteString(physicalPath)))
+	}
+	query := strings.Join(parts, ", ")
+	_, err := c.db.ExecContext(ctx, query)
+	if err != nil {
+		return fmt.Errorf("failed to restore database %s with move: %w", dbName, err)
+	}
+	return nil
+}
+
 // execInDatabase executes a statement in the context of a specific database.
 func (c *MSSQLClient) execInDatabase(ctx context.Context, dbName, query string) error {
 	conn, err := c.db.Conn(ctx)
