@@ -74,4 +74,4 @@ kubectl get msdb
 
 ## License
 
-See [LICENSE](LICENSE).
+Apache License 2.0

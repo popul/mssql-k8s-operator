@@ -50,7 +50,6 @@ The operator emits Kubernetes events on significant actions. View them with `kub
 | `LoginCreated` | Normal | Login was created |
 | `LoginDropped` | Normal | Login was dropped |
 | `LoginPasswordRotated` | Normal | Password was updated |
-| `LoginDefaultDatabaseUpdated` | Normal | Default database was changed |
 | `ServerRoleAdded` | Normal | Login was added to a server role |
 | `ServerRoleRemoved` | Normal | Login was removed from a server role |
 
@@ -58,8 +57,8 @@ The operator emits Kubernetes events on significant actions. View them with `kub
 
 | Event | Type | Description |
 |-------|------|-------------|
-| `UserCreated` | Normal | User was created in the database |
-| `UserDropped` | Normal | User was dropped |
+| `DatabaseUserCreated` | Normal | User was created in the database |
+| `DatabaseUserDropped` | Normal | User was dropped |
 | `DatabaseRoleAdded` | Normal | User was added to a database role |
 | `DatabaseRoleRemoved` | Normal | User was removed from a database role |
 
@@ -85,9 +84,10 @@ The operator emits Kubernetes events on significant actions. View them with `kub
 
 | Metric | Type | Labels | Description |
 |--------|------|--------|-------------|
-| `mssql_operator_reconcile_duration_seconds` | Histogram | `resource_type` | Time spent in `Reconcile()` |
-| `mssql_operator_reconcile_total` | Counter | `resource_type`, `result` | Total reconciliations |
-| `mssql_operator_reconcile_errors_total` | Counter | `resource_type`, `reason` | Error count |
+| `mssql_operator_reconcile_duration_seconds` | Histogram | `controller` | Time spent in `Reconcile()` |
+| `mssql_operator_reconcile_total` | Counter | `controller`, `result` | Total reconciliations |
+| `mssql_operator_reconcile_errors_total` | Counter | `controller`, `reason` | Error count |
+| `mssql_operator_managed_resources` | Gauge | `type`, `namespace` | Number of managed SQL Server resources |
 
 ## Health endpoints
 

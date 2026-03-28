@@ -44,7 +44,18 @@ This ensures cleanup happens even if the user runs `kubectl delete` -- the SQL S
 - `deletionPolicy: Retain` (default) skips the SQL Server cleanup entirely. The finalizer is removed and the CR disappears, but the database/login/schema continues to exist on SQL Server.
 - `deletionPolicy: Delete` runs the SQL Server cleanup before removing the finalizer.
 - If cleanup fails due to a transient error (connection lost), the controller logs the error and removes the finalizer anyway. This prevents CRs from being stuck in `Terminating` forever.
-- If cleanup fails because of a structural blocker (a login has users, a schema has objects), the controller keeps the finalizer and requeues. It retries periodically until the blocker is resolved.
+
+The behavior for structural blockers varies by controller:
+
+| Controller | Blocker | Behavior |
+|------------|---------|----------|
+| Login | Login has dependent database users | Keeps finalizer, requeues until users are deleted |
+| DatabaseUser | User owns objects in the database | Keeps finalizer, requeues until ownership is transferred |
+| Schema | Schema contains objects | Keeps finalizer, requeues until objects are moved/dropped |
+| Database | None | Always removes finalizer (logs error if DROP fails) |
+| Permission | None | Always removes finalizer (logs error if REVOKE fails) |
+
+Database and Permission controllers always remove the finalizer on deletion because there is no user-actionable blocker — a failed DROP or REVOKE is typically a transient issue that should not leave the CR stuck indefinitely.
 
 ## Secret watches
 
