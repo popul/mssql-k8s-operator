@@ -124,6 +124,16 @@ func main() {
 		os.Exit(1)
 	}
 
+	if err := (&controller.AvailabilityGroupReconciler{
+		Client:           mgr.GetClient(),
+		Scheme:           mgr.GetScheme(),
+		Recorder:         mgr.GetEventRecorderFor("availabilitygroup-controller"),
+		SQLClientFactory: sqlFactory,
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "AvailabilityGroup")
+		os.Exit(1)
+	}
+
 	if err := (&controller.BackupReconciler{
 		Client:           mgr.GetClient(),
 		Scheme:           mgr.GetScheme(),

@@ -54,9 +54,77 @@ type SQLClient interface {
 	BackupDatabase(ctx context.Context, dbName, destination string, backupType string, compression bool) error
 	RestoreDatabase(ctx context.Context, dbName, source string) error
 
+	// Availability Group operations
+	AGExists(ctx context.Context, agName string) (bool, error)
+	CreateAG(ctx context.Context, config AGConfig) error
+	GetAGStatus(ctx context.Context, agName string) (*AGStatus, error)
+	AddDatabaseToAG(ctx context.Context, agName, dbName string) error
+	RemoveDatabaseFromAG(ctx context.Context, agName, dbName string) error
+	JoinAG(ctx context.Context, agName string) error
+	GrantAGCreateDatabase(ctx context.Context, agName string) error
+	AddListenerToAG(ctx context.Context, agName string, listener AGListenerConfig) error
+	DropAG(ctx context.Context, agName string) error
+	CreateHADREndpoint(ctx context.Context, port int) error
+	HADREndpointExists(ctx context.Context) (bool, error)
+
 	// Connection
 	Close() error
 	Ping(ctx context.Context) error
+}
+
+// AGConfig contains the configuration for creating an Availability Group.
+type AGConfig struct {
+	Name                      string
+	Replicas                  []AGReplicaConfig
+	Databases                 []string
+	AutomatedBackupPreference string
+	DBFailover                bool
+}
+
+// AGReplicaConfig contains the configuration for a single AG replica.
+type AGReplicaConfig struct {
+	ServerName       string
+	EndpointURL      string
+	AvailabilityMode string // "SYNCHRONOUS_COMMIT" or "ASYNCHRONOUS_COMMIT"
+	FailoverMode     string // "AUTOMATIC" or "MANUAL"
+	SeedingMode      string // "AUTOMATIC" or "MANUAL"
+	SecondaryRole    string // "ALL", "READ_ONLY", "NO"
+}
+
+// AGListenerConfig contains the configuration for an AG listener.
+type AGListenerConfig struct {
+	Name        string
+	Port        int
+	IPAddresses []AGListenerIPConfig
+}
+
+// AGListenerIPConfig contains a listener IP address with subnet mask.
+type AGListenerIPConfig struct {
+	IP         string
+	SubnetMask string
+}
+
+// AGStatus represents the observed state of an Availability Group.
+type AGStatus struct {
+	Name           string
+	PrimaryReplica string
+	Replicas       []AGReplicaState
+	Databases      []AGDatabaseState
+}
+
+// AGReplicaState represents the observed state of a replica.
+type AGReplicaState struct {
+	ServerName           string
+	Role                 string // "PRIMARY", "SECONDARY", "RESOLVING"
+	SynchronizationState string // "SYNCHRONIZED", "SYNCHRONIZING", "NOT_SYNCHRONIZING"
+	Connected            bool
+}
+
+// AGDatabaseState represents the observed state of a database in the AG.
+type AGDatabaseState struct {
+	Name                 string
+	SynchronizationState string // "SYNCHRONIZED", "SYNCHRONIZING", "NOT_SYNCHRONIZING"
+	Joined               bool
 }
 
 // PermissionState represents a permission as observed on SQL Server.

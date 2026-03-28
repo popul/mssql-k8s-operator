@@ -127,5 +127,31 @@ func (c *interfaceChecker) RestoreDatabase(ctx context.Context, dbName, source s
 	return nil
 }
 
+func (c *interfaceChecker) AGExists(ctx context.Context, agName string) (bool, error) {
+	return false, nil
+}
+func (c *interfaceChecker) CreateAG(ctx context.Context, config AGConfig) error { return nil }
+func (c *interfaceChecker) GetAGStatus(ctx context.Context, agName string) (*AGStatus, error) {
+	return nil, nil
+}
+func (c *interfaceChecker) AddDatabaseToAG(ctx context.Context, agName, dbName string) error {
+	return nil
+}
+func (c *interfaceChecker) RemoveDatabaseFromAG(ctx context.Context, agName, dbName string) error {
+	return nil
+}
+func (c *interfaceChecker) JoinAG(ctx context.Context, agName string) error     { return nil }
+func (c *interfaceChecker) GrantAGCreateDatabase(ctx context.Context, agName string) error {
+	return nil
+}
+func (c *interfaceChecker) AddListenerToAG(ctx context.Context, agName string, listener AGListenerConfig) error {
+	return nil
+}
+func (c *interfaceChecker) DropAG(ctx context.Context, agName string) error     { return nil }
+func (c *interfaceChecker) CreateHADREndpoint(ctx context.Context, port int) error { return nil }
+func (c *interfaceChecker) HADREndpointExists(ctx context.Context) (bool, error) {
+	return false, nil
+}
+
 func (c *interfaceChecker) Close() error                   { return nil }
 func (c *interfaceChecker) Ping(ctx context.Context) error { return nil }

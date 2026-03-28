@@ -278,3 +278,66 @@ NAME              DATABASE   PHASE       AGE
 ### Immutability
 
 Spec is fully immutable after creation. To re-run a restore, delete the CR and create a new one.
+
+---
+
+## AvailabilityGroup
+
+Short name: `msag` | Category: `mssql`
+
+Manages an Always On Availability Group for SQL Server high availability.
+
+### Spec
+
+| Field | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `agName` | `string` | yes | | Name of the AG on SQL Server (immutable) |
+| `replicas` | `[]AGReplicaSpec` | yes (min 2) | | Replicas participating in the AG |
+| `databases` | `[]AGDatabaseSpec` | no | `[]` | Databases to include in the AG |
+| `listener` | `*AGListenerSpec` | no | | AG listener configuration |
+| `automatedBackupPreference` | `*string` | no | `Secondary` | Where automated backups run: `Primary`, `Secondary`, `SecondaryOnly`, `None` |
+| `dbFailover` | `*bool` | no | `true` | Enable database-level health detection for automatic failover |
+
+### AGReplicaSpec
+
+| Field | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `serverName` | `string` | yes | | SQL Server instance name |
+| `endpointURL` | `string` | yes | | Database mirroring endpoint (e.g. `TCP://sql-0:5022`) |
+| `availabilityMode` | `AvailabilityMode` | no | `SynchronousCommit` | `SynchronousCommit` or `AsynchronousCommit` |
+| `failoverMode` | `FailoverMode` | no | `Automatic` | `Automatic` (requires sync commit) or `Manual` |
+| `seedingMode` | `SeedingMode` | no | `Automatic` | `Automatic` or `Manual` |
+| `secondaryRole` | `SecondaryRole` | no | `No` | `No`, `AllowReadIntentOnly`, `AllowAllConnections` |
+| `server` | `ServerReference` | yes | | Connection details for this replica |
+
+### AGListenerSpec
+
+| Field | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `name` | `string` | yes | | Listener DNS name |
+| `port` | `*int32` | no | `1433` | Listener port |
+| `ipAddresses` | `[]AGListenerIP` | no | `[]` | Static IP addresses with subnet masks |
+
+### Status
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `conditions` | `[]metav1.Condition` | See [status conditions](status-conditions.md) |
+| `observedGeneration` | `int64` | Last reconciled `metadata.generation` |
+| `primaryReplica` | `string` | Current primary server name |
+| `replicas` | `[]AGReplicaStatus` | Observed state of each replica (role, sync state, connected) |
+| `databases` | `[]AGDatabaseStatus` | Observed state of each database (sync state, joined) |
+
+### Print columns
+
+```
+NAME       AG     PRIMARY   READY   AGE
+```
+
+### Immutability
+
+Only `agName` is immutable. Replicas, databases, and listener can be updated after creation.
+
+### Deletion behavior
+
+Dropping the CR drops the AG on SQL Server. Databases are **not** deleted — they remain as standalone databases.

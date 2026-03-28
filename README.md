@@ -20,6 +20,7 @@ A Kubernetes operator for managing SQL Server objects (databases, logins, users,
 | `Permission` | `msperm` | Fine-grained GRANT / DENY / REVOKE |
 | `Backup` | `msbak` | One-shot database backup (Full/Differential/Log) |
 | `Restore` | `msrestore` | One-shot database restore from backup file |
+| `AvailabilityGroup` | `msag` | Always On Availability Groups (HA) |
 
 ## Quick start
 
@@ -62,6 +63,7 @@ kubectl get msdb
 | [Manage logins & users](docs/how-to/manage-logins-users.md) | Create logins, users, rotate passwords |
 | [Manage schemas & permissions](docs/how-to/manage-schemas-permissions.md) | Create schemas, grant/deny permissions |
 | [Backup & restore](docs/how-to/backup-restore.md) | Backup and restore databases |
+| [High availability](docs/how-to/high-availability.md) | Configure Always On Availability Groups |
 | [Troubleshoot](docs/how-to/troubleshoot.md) | Diagnose and fix common issues |
 | **Reference** | |
 | [CRD reference](docs/reference/crds.md) | All CRD fields, types, and defaults |

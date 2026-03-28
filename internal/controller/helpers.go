@@ -202,6 +202,28 @@ func mapSecretToRestores(ctx context.Context, c client.Client) func(context.Cont
 	}
 }
 
+// mapSecretToAGs returns reconcile requests for all AvailabilityGroup CRs that reference the given Secret.
+func mapSecretToAGs(ctx context.Context, c client.Client) func(context.Context, client.Object) []reconcile.Request {
+	return func(ctx context.Context, obj client.Object) []reconcile.Request {
+		var list v1alpha1.AvailabilityGroupList
+		if err := c.List(ctx, &list, client.InNamespace(obj.GetNamespace())); err != nil {
+			return nil
+		}
+		var requests []reconcile.Request
+		for _, ag := range list.Items {
+			for _, replica := range ag.Spec.Replicas {
+				if replica.Server.CredentialsSecret.Name == obj.GetName() {
+					requests = append(requests, reconcile.Request{
+						NamespacedName: types.NamespacedName{Name: ag.Name, Namespace: ag.Namespace},
+					})
+					break
+				}
+			}
+		}
+		return requests
+	}
+}
+
 // requeueWithJitter returns a RequeueAfter duration with ±20% jitter to avoid thundering herd.
 func requeueWithJitter(base time.Duration) time.Duration {
 	jitter := time.Duration(rand.Int63n(int64(base*2/5))) - base/5

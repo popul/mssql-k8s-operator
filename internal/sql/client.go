@@ -475,6 +475,218 @@ func (c *MSSQLClient) queryInDatabase(ctx context.Context, dbName string, fn fun
 	return fn(conn)
 }
 
+// --- Availability Group operations ---
+
+func (c *MSSQLClient) AGExists(ctx context.Context, agName string) (bool, error) {
+	var exists bool
+	err := c.db.QueryRowContext(ctx,
+		"SELECT CASE WHEN EXISTS (SELECT 1 FROM sys.availability_groups WHERE name = @p1) THEN 1 ELSE 0 END",
+		agName).Scan(&exists)
+	return exists, err
+}
+
+func (c *MSSQLClient) CreateAG(ctx context.Context, config AGConfig) error {
+	// Build CREATE AVAILABILITY GROUP statement
+	query := fmt.Sprintf("CREATE AVAILABILITY GROUP %s\nWITH (\n", QuoteName(config.Name))
+	query += fmt.Sprintf("    AUTOMATED_BACKUP_PREFERENCE = %s,\n", config.AutomatedBackupPreference)
+	if config.DBFailover {
+		query += "    DB_FAILOVER = ON\n"
+	} else {
+		query += "    DB_FAILOVER = OFF\n"
+	}
+	query += ")\n"
+
+	// FOR DATABASE clause
+	if len(config.Databases) > 0 {
+		query += "FOR"
+		for i, db := range config.Databases {
+			if i > 0 {
+				query += ","
+			}
+			query += " DATABASE " + QuoteName(db)
+		}
+		query += "\n"
+	}
+
+	// REPLICA ON clause
+	query += "REPLICA ON\n"
+	for i, replica := range config.Replicas {
+		if i > 0 {
+			query += ",\n"
+		}
+		query += fmt.Sprintf("    N'%s' WITH (\n", strings.ReplaceAll(replica.ServerName, "'", "''"))
+		query += fmt.Sprintf("        ENDPOINT_URL = N'%s',\n", strings.ReplaceAll(replica.EndpointURL, "'", "''"))
+		query += fmt.Sprintf("        AVAILABILITY_MODE = %s,\n", replica.AvailabilityMode)
+		query += fmt.Sprintf("        FAILOVER_MODE = %s,\n", replica.FailoverMode)
+		query += fmt.Sprintf("        SEEDING_MODE = %s,\n", replica.SeedingMode)
+		query += fmt.Sprintf("        SECONDARY_ROLE (ALLOW_CONNECTIONS = %s)\n", replica.SecondaryRole)
+		query += "    )"
+	}
+	query += ";"
+
+	_, err := c.db.ExecContext(ctx, query)
+	if err != nil {
+		return fmt.Errorf("failed to create availability group %s: %w", config.Name, err)
+	}
+	return nil
+}
+
+func (c *MSSQLClient) GetAGStatus(ctx context.Context, agName string) (*AGStatus, error) {
+	status := &AGStatus{Name: agName}
+
+	// Get primary replica
+	err := c.db.QueryRowContext(ctx,
+		`SELECT ags.primary_replica
+		 FROM sys.dm_hadr_availability_group_states ags
+		 JOIN sys.availability_groups ag ON ags.group_id = ag.group_id
+		 WHERE ag.name = @p1`, agName).Scan(&status.PrimaryReplica)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get AG state for %s: %w", agName, err)
+	}
+
+	// Get replica states
+	rows, err := c.db.QueryContext(ctx,
+		`SELECT ar.replica_server_name,
+		        ISNULL(ars.role_desc, 'RESOLVING'),
+		        ISNULL(ars.synchronization_health_desc, 'NOT_HEALTHY'),
+		        ISNULL(ars.connected_state_desc, 'DISCONNECTED')
+		 FROM sys.availability_replicas ar
+		 JOIN sys.availability_groups ag ON ar.group_id = ag.group_id
+		 LEFT JOIN sys.dm_hadr_availability_replica_states ars ON ar.replica_id = ars.replica_id
+		 WHERE ag.name = @p1`, agName)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get replica states for AG %s: %w", agName, err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var rs AGReplicaState
+		var connState string
+		if err := rows.Scan(&rs.ServerName, &rs.Role, &rs.SynchronizationState, &connState); err != nil {
+			return nil, err
+		}
+		rs.Connected = connState == "CONNECTED"
+		status.Replicas = append(status.Replicas, rs)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	// Get database states
+	dbRows, err := c.db.QueryContext(ctx,
+		`SELECT d.name,
+		        ISNULL(drs.synchronization_state_desc, 'NOT_SYNCHRONIZING'),
+		        CASE WHEN drs.is_local = 1 THEN 1 ELSE 0 END
+		 FROM sys.availability_databases_cluster adc
+		 JOIN sys.availability_groups ag ON adc.group_id = ag.group_id
+		 JOIN sys.databases d ON adc.database_name = d.name
+		 LEFT JOIN sys.dm_hadr_database_replica_states drs ON adc.group_database_id = drs.group_database_id AND drs.is_local = 1
+		 WHERE ag.name = @p1`, agName)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get database states for AG %s: %w", agName, err)
+	}
+	defer dbRows.Close()
+
+	for dbRows.Next() {
+		var ds AGDatabaseState
+		var isLocal int
+		if err := dbRows.Scan(&ds.Name, &ds.SynchronizationState, &isLocal); err != nil {
+			return nil, err
+		}
+		ds.Joined = isLocal == 1
+		status.Databases = append(status.Databases, ds)
+	}
+
+	return status, dbRows.Err()
+}
+
+func (c *MSSQLClient) AddDatabaseToAG(ctx context.Context, agName, dbName string) error {
+	query := fmt.Sprintf("ALTER AVAILABILITY GROUP %s ADD DATABASE %s", QuoteName(agName), QuoteName(dbName))
+	_, err := c.db.ExecContext(ctx, query)
+	if err != nil {
+		return fmt.Errorf("failed to add database %s to AG %s: %w", dbName, agName, err)
+	}
+	return nil
+}
+
+func (c *MSSQLClient) RemoveDatabaseFromAG(ctx context.Context, agName, dbName string) error {
+	query := fmt.Sprintf("ALTER AVAILABILITY GROUP %s REMOVE DATABASE %s", QuoteName(agName), QuoteName(dbName))
+	_, err := c.db.ExecContext(ctx, query)
+	if err != nil {
+		return fmt.Errorf("failed to remove database %s from AG %s: %w", dbName, agName, err)
+	}
+	return nil
+}
+
+func (c *MSSQLClient) JoinAG(ctx context.Context, agName string) error {
+	query := fmt.Sprintf("ALTER AVAILABILITY GROUP %s JOIN", QuoteName(agName))
+	_, err := c.db.ExecContext(ctx, query)
+	if err != nil {
+		return fmt.Errorf("failed to join AG %s: %w", agName, err)
+	}
+	return nil
+}
+
+func (c *MSSQLClient) GrantAGCreateDatabase(ctx context.Context, agName string) error {
+	query := fmt.Sprintf("ALTER AVAILABILITY GROUP %s GRANT CREATE ANY DATABASE", QuoteName(agName))
+	_, err := c.db.ExecContext(ctx, query)
+	if err != nil {
+		return fmt.Errorf("failed to grant create database on AG %s: %w", agName, err)
+	}
+	return nil
+}
+
+func (c *MSSQLClient) AddListenerToAG(ctx context.Context, agName string, listener AGListenerConfig) error {
+	query := fmt.Sprintf("ALTER AVAILABILITY GROUP %s\nADD LISTENER N'%s' (\n",
+		QuoteName(agName), strings.ReplaceAll(listener.Name, "'", "''"))
+
+	if len(listener.IPAddresses) > 0 {
+		query += "    WITH IP (\n"
+		for i, ip := range listener.IPAddresses {
+			if i > 0 {
+				query += ",\n"
+			}
+			query += fmt.Sprintf("        (N'%s', N'%s')", ip.IP, ip.SubnetMask)
+		}
+		query += "\n    ),\n"
+	}
+	query += fmt.Sprintf("    PORT = %d\n);", listener.Port)
+
+	_, err := c.db.ExecContext(ctx, query)
+	if err != nil {
+		return fmt.Errorf("failed to add listener to AG %s: %w", agName, err)
+	}
+	return nil
+}
+
+func (c *MSSQLClient) DropAG(ctx context.Context, agName string) error {
+	query := fmt.Sprintf("DROP AVAILABILITY GROUP %s", QuoteName(agName))
+	_, err := c.db.ExecContext(ctx, query)
+	if err != nil {
+		return fmt.Errorf("failed to drop availability group %s: %w", agName, err)
+	}
+	return nil
+}
+
+func (c *MSSQLClient) CreateHADREndpoint(ctx context.Context, port int) error {
+	query := fmt.Sprintf(`CREATE ENDPOINT hadr_endpoint
+    STATE = STARTED
+    AS TCP (LISTENER_PORT = %d)
+    FOR DATABASE_MIRRORING (ROLE = ALL)`, port)
+	_, err := c.db.ExecContext(ctx, query)
+	if err != nil {
+		return fmt.Errorf("failed to create HADR endpoint on port %d: %w", port, err)
+	}
+	return nil
+}
+
+func (c *MSSQLClient) HADREndpointExists(ctx context.Context) (bool, error) {
+	var exists bool
+	err := c.db.QueryRowContext(ctx,
+		"SELECT CASE WHEN EXISTS (SELECT 1 FROM sys.database_mirroring_endpoints) THEN 1 ELSE 0 END").Scan(&exists)
+	return exists, err
+}
+
 // --- Backup/Restore operations ---
 
 func (c *MSSQLClient) BackupDatabase(ctx context.Context, dbName, destination string, backupType string, compression bool) error {

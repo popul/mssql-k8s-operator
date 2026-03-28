@@ -53,6 +53,7 @@ type MockClient struct {
 	users        map[string]*MockUser       // key: "dbName/userName"
 	schemas      map[string]*MockSchema     // key: "dbName/schemaName"
 	permissions  map[string][]MockPermission // key: "dbName/userName"
+	ags          map[string]*MockAG          // key: AG name
 	calls        map[string]int
 	ConnectError error
 	// MethodErrors allows injecting errors for specific methods.
@@ -721,6 +722,221 @@ func (m *MockClient) LoginHasUsers(_ context.Context, loginName string) (bool, e
 		}
 	}
 	return false, nil
+}
+
+// --- Availability Group operations ---
+
+// MockAG represents an Availability Group in the mock.
+type MockAG struct {
+	Name           string
+	PrimaryReplica string
+	Replicas       []AGReplicaState
+	Databases      []AGDatabaseState
+	HasListener    bool
+}
+
+func (m *MockClient) AGExists(_ context.Context, agName string) (bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.track("AGExists")
+	if err := m.checkConnect(); err != nil {
+		return false, err
+	}
+	if m.ags == nil {
+		return false, nil
+	}
+	_, ok := m.ags[agName]
+	return ok, nil
+}
+
+func (m *MockClient) CreateAG(_ context.Context, config AGConfig) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.track("CreateAG")
+	if err := m.checkConnect(); err != nil {
+		return err
+	}
+	if err := m.checkMethodError("CreateAG"); err != nil {
+		return err
+	}
+	if m.ags == nil {
+		m.ags = make(map[string]*MockAG)
+	}
+	replicas := make([]AGReplicaState, len(config.Replicas))
+	for i, r := range config.Replicas {
+		role := "SECONDARY"
+		if i == 0 {
+			role = "PRIMARY"
+		}
+		replicas[i] = AGReplicaState{
+			ServerName:           r.ServerName,
+			Role:                 role,
+			SynchronizationState: "SYNCHRONIZED",
+			Connected:            true,
+		}
+	}
+	databases := make([]AGDatabaseState, len(config.Databases))
+	for i, db := range config.Databases {
+		databases[i] = AGDatabaseState{Name: db, SynchronizationState: "SYNCHRONIZED", Joined: true}
+	}
+	primary := ""
+	if len(config.Replicas) > 0 {
+		primary = config.Replicas[0].ServerName
+	}
+	m.ags[config.Name] = &MockAG{
+		Name:           config.Name,
+		PrimaryReplica: primary,
+		Replicas:       replicas,
+		Databases:      databases,
+	}
+	return nil
+}
+
+func (m *MockClient) GetAGStatus(_ context.Context, agName string) (*AGStatus, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.track("GetAGStatus")
+	if err := m.checkConnect(); err != nil {
+		return nil, err
+	}
+	if err := m.checkMethodError("GetAGStatus"); err != nil {
+		return nil, err
+	}
+	if m.ags == nil {
+		return nil, fmt.Errorf("availability group %q not found", agName)
+	}
+	ag, ok := m.ags[agName]
+	if !ok {
+		return nil, fmt.Errorf("availability group %q not found", agName)
+	}
+	return &AGStatus{
+		Name:           ag.Name,
+		PrimaryReplica: ag.PrimaryReplica,
+		Replicas:       ag.Replicas,
+		Databases:      ag.Databases,
+	}, nil
+}
+
+func (m *MockClient) AddDatabaseToAG(_ context.Context, agName, dbName string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.track("AddDatabaseToAG")
+	if err := m.checkConnect(); err != nil {
+		return err
+	}
+	if err := m.checkMethodError("AddDatabaseToAG"); err != nil {
+		return err
+	}
+	if ag, ok := m.ags[agName]; ok {
+		ag.Databases = append(ag.Databases, AGDatabaseState{Name: dbName, SynchronizationState: "SYNCHRONIZED", Joined: true})
+	}
+	return nil
+}
+
+func (m *MockClient) RemoveDatabaseFromAG(_ context.Context, agName, dbName string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.track("RemoveDatabaseFromAG")
+	if err := m.checkConnect(); err != nil {
+		return err
+	}
+	if err := m.checkMethodError("RemoveDatabaseFromAG"); err != nil {
+		return err
+	}
+	if ag, ok := m.ags[agName]; ok {
+		filtered := ag.Databases[:0]
+		for _, db := range ag.Databases {
+			if db.Name != dbName {
+				filtered = append(filtered, db)
+			}
+		}
+		ag.Databases = filtered
+	}
+	return nil
+}
+
+func (m *MockClient) JoinAG(_ context.Context, agName string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.track("JoinAG")
+	if err := m.checkConnect(); err != nil {
+		return err
+	}
+	if err := m.checkMethodError("JoinAG"); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (m *MockClient) GrantAGCreateDatabase(_ context.Context, agName string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.track("GrantAGCreateDatabase")
+	if err := m.checkConnect(); err != nil {
+		return err
+	}
+	if err := m.checkMethodError("GrantAGCreateDatabase"); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (m *MockClient) AddListenerToAG(_ context.Context, agName string, listener AGListenerConfig) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.track("AddListenerToAG")
+	if err := m.checkConnect(); err != nil {
+		return err
+	}
+	if err := m.checkMethodError("AddListenerToAG"); err != nil {
+		return err
+	}
+	if ag, ok := m.ags[agName]; ok {
+		ag.HasListener = true
+	}
+	return nil
+}
+
+func (m *MockClient) DropAG(_ context.Context, agName string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.track("DropAG")
+	if err := m.checkConnect(); err != nil {
+		return err
+	}
+	if err := m.checkMethodError("DropAG"); err != nil {
+		return err
+	}
+	delete(m.ags, agName)
+	return nil
+}
+
+func (m *MockClient) CreateHADREndpoint(_ context.Context, port int) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.track("CreateHADREndpoint")
+	if err := m.checkConnect(); err != nil {
+		return err
+	}
+	if err := m.checkMethodError("CreateHADREndpoint"); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (m *MockClient) HADREndpointExists(_ context.Context) (bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.track("HADREndpointExists")
+	if err := m.checkConnect(); err != nil {
+		return false, err
+	}
+	return m.WasCalledLocked("CreateHADREndpoint"), nil
+}
+
+// WasCalledLocked checks call history without acquiring lock (caller must hold lock).
+func (m *MockClient) WasCalledLocked(method string) bool {
+	return m.calls[method] > 0
 }
 
 // --- Backup/Restore operations ---
