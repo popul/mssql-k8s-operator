@@ -21,6 +21,7 @@ A Kubernetes operator for managing SQL Server objects (databases, logins, users,
 | `Backup` | `msbak` | One-shot database backup (Full/Differential/Log) |
 | `Restore` | `msrestore` | One-shot database restore from backup file |
 | `AvailabilityGroup` | `msag` | Always On Availability Groups (HA) |
+| `AGFailover` | `msagfo` | One-shot AG failover (manual/forced) |
 
 ## Quick start
 

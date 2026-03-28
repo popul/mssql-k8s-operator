@@ -148,6 +148,13 @@ func (c *interfaceChecker) AddListenerToAG(ctx context.Context, agName string, l
 	return nil
 }
 func (c *interfaceChecker) DropAG(ctx context.Context, agName string) error     { return nil }
+func (c *interfaceChecker) FailoverAG(ctx context.Context, agName string) error { return nil }
+func (c *interfaceChecker) ForceFailoverAG(ctx context.Context, agName string) error {
+	return nil
+}
+func (c *interfaceChecker) GetAGReplicaRole(ctx context.Context, agName, serverName string) (string, error) {
+	return "", nil
+}
 func (c *interfaceChecker) CreateHADREndpoint(ctx context.Context, port int) error { return nil }
 func (c *interfaceChecker) HADREndpointExists(ctx context.Context) (bool, error) {
 	return false, nil

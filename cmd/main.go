@@ -134,6 +134,16 @@ func main() {
 		os.Exit(1)
 	}
 
+	if err := (&controller.AGFailoverReconciler{
+		Client:           mgr.GetClient(),
+		Scheme:           mgr.GetScheme(),
+		Recorder:         mgr.GetEventRecorderFor("agfailover-controller"),
+		SQLClientFactory: sqlFactory,
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "AGFailover")
+		os.Exit(1)
+	}
+
 	if err := (&controller.BackupReconciler{
 		Client:           mgr.GetClient(),
 		Scheme:           mgr.GetScheme(),

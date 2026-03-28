@@ -659,6 +659,38 @@ func (c *MSSQLClient) AddListenerToAG(ctx context.Context, agName string, listen
 	return nil
 }
 
+func (c *MSSQLClient) FailoverAG(ctx context.Context, agName string) error {
+	query := fmt.Sprintf("ALTER AVAILABILITY GROUP %s FAILOVER", QuoteName(agName))
+	_, err := c.db.ExecContext(ctx, query)
+	if err != nil {
+		return fmt.Errorf("failed to failover AG %s: %w", agName, err)
+	}
+	return nil
+}
+
+func (c *MSSQLClient) ForceFailoverAG(ctx context.Context, agName string) error {
+	query := fmt.Sprintf("ALTER AVAILABILITY GROUP %s FORCE_FAILOVER_ALLOW_DATA_LOSS", QuoteName(agName))
+	_, err := c.db.ExecContext(ctx, query)
+	if err != nil {
+		return fmt.Errorf("failed to force failover AG %s: %w", agName, err)
+	}
+	return nil
+}
+
+func (c *MSSQLClient) GetAGReplicaRole(ctx context.Context, agName, serverName string) (string, error) {
+	var role string
+	err := c.db.QueryRowContext(ctx,
+		`SELECT ISNULL(ars.role_desc, 'RESOLVING')
+		 FROM sys.availability_replicas ar
+		 JOIN sys.availability_groups ag ON ar.group_id = ag.group_id
+		 LEFT JOIN sys.dm_hadr_availability_replica_states ars ON ar.replica_id = ars.replica_id
+		 WHERE ag.name = @p1 AND ar.replica_server_name = @p2`, agName, serverName).Scan(&role)
+	if err != nil {
+		return "", fmt.Errorf("failed to get role for replica %s in AG %s: %w", serverName, agName, err)
+	}
+	return role, nil
+}
+
 func (c *MSSQLClient) DropAG(ctx context.Context, agName string) error {
 	query := fmt.Sprintf("DROP AVAILABILITY GROUP %s", QuoteName(agName))
 	_, err := c.db.ExecContext(ctx, query)

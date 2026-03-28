@@ -64,6 +64,9 @@ type SQLClient interface {
 	GrantAGCreateDatabase(ctx context.Context, agName string) error
 	AddListenerToAG(ctx context.Context, agName string, listener AGListenerConfig) error
 	DropAG(ctx context.Context, agName string) error
+	FailoverAG(ctx context.Context, agName string) error
+	ForceFailoverAG(ctx context.Context, agName string) error
+	GetAGReplicaRole(ctx context.Context, agName, serverName string) (string, error)
 	CreateHADREndpoint(ctx context.Context, port int) error
 	HADREndpointExists(ctx context.Context) (bool, error)
 

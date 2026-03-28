@@ -128,6 +128,63 @@ The operator will add it on the next reconciliation.
 | `Automatic` | SQL Server copies data to secondaries automatically. Simplest option. |
 | `Manual` | You must backup/restore the database on secondaries before joining. Required for very large databases. |
 
+## Manual failover
+
+Create an `AGFailover` CR to trigger a one-shot failover to a specific replica.
+
+### Safe failover (synchronous replica, zero data loss)
+
+```yaml
+apiVersion: mssql.popul.io/v1alpha1
+kind: AGFailover
+metadata:
+  name: failover-to-sql1
+spec:
+  agName: myag
+  targetReplica: sql-1
+  server:
+    host: sql-1.sql-headless.mssql.svc   # connect to the TARGET
+    credentialsSecret:
+      name: sa-credentials
+```
+
+### Forced failover (async replica, potential data loss)
+
+```yaml
+apiVersion: mssql.popul.io/v1alpha1
+kind: AGFailover
+metadata:
+  name: failover-dr
+  annotations:
+    mssql.popul.io/confirm-data-loss: "yes"   # required safety annotation
+spec:
+  agName: myag
+  targetReplica: sql-2
+  force: true
+  server:
+    host: sql-2.sql-dr.svc
+    credentialsSecret:
+      name: sa-credentials-dr
+```
+
+The `force: true` flag requires the annotation `mssql.popul.io/confirm-data-loss: "yes"` to prevent accidental data loss.
+
+### Check failover status
+
+```bash
+kubectl get msagfo
+kubectl describe msagfo failover-to-sql1
+```
+
+The status shows `previousPrimary`, `newPrimary`, and phase (`Completed` or `Failed`).
+
+### Important notes
+
+- `AGFailover` is a **one-shot operation** — once completed or failed, it is never re-executed
+- The spec is **fully immutable** — to retry, delete and recreate the CR
+- The `FAILOVER` command runs on the **target replica** (the secondary being promoted)
+- If the target is already primary, the CR completes immediately (no-op)
+
 ## Deletion
 
 Deleting the `AvailabilityGroup` CR drops the AG on SQL Server (`DROP AVAILABILITY GROUP`). The databases themselves are **not** deleted — they remain as standalone databases on each instance.
@@ -135,5 +192,4 @@ Deleting the `AvailabilityGroup` CR drops the AG on SQL Server (`DROP AVAILABILI
 ## Limitations
 
 - The operator does not deploy SQL Server instances (use a StatefulSet or the Microsoft operator)
-- Manual failover (`ALTER AVAILABILITY GROUP ... FAILOVER`) is not managed by the operator
 - Listener IP addresses are static — on Kubernetes, prefer using a Service instead

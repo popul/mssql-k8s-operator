@@ -341,3 +341,42 @@ Only `agName` is immutable. Replicas, databases, and listener can be updated aft
 ### Deletion behavior
 
 Dropping the CR drops the AG on SQL Server. Databases are **not** deleted — they remain as standalone databases.
+
+---
+
+## AGFailover
+
+Short name: `msagfo` | Category: `mssql`
+
+One-shot manual failover of an Availability Group.
+
+### Spec
+
+| Field | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `agName` | `string` | yes | | Name of the AG to failover |
+| `targetReplica` | `string` | yes | | Server name of the secondary to promote |
+| `server` | `ServerReference` | yes | | Connection details for the target replica |
+| `force` | `*bool` | no | `false` | Force failover (accepts data loss). Requires annotation `mssql.popul.io/confirm-data-loss: "yes"`. |
+
+### Status
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `phase` | `FailoverPhase` | `Pending`, `Running`, `Completed`, `Failed` |
+| `conditions` | `[]metav1.Condition` | See [status conditions](status-conditions.md) |
+| `observedGeneration` | `int64` | Last reconciled `metadata.generation` |
+| `startTime` | `*metav1.Time` | When the failover started |
+| `completionTime` | `*metav1.Time` | When the failover completed |
+| `previousPrimary` | `string` | Server name of the primary before failover |
+| `newPrimary` | `string` | Server name of the primary after failover |
+
+### Print columns
+
+```
+NAME              AG     TARGET   PHASE       AGE
+```
+
+### Immutability
+
+Spec is fully immutable after creation. To retry a failover, delete the CR and create a new one.

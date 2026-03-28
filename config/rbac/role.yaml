@@ -22,6 +22,7 @@ rules:
 - apiGroups:
   - mssql.popul.io
   resources:
+  - agfailovers
   - availabilitygroups
   - backups
   - databases
@@ -41,6 +42,7 @@ rules:
 - apiGroups:
   - mssql.popul.io
   resources:
+  - agfailovers/finalizers
   - availabilitygroups/finalizers
   - backups/finalizers
   - databases/finalizers
@@ -54,6 +56,7 @@ rules:
 - apiGroups:
   - mssql.popul.io
   resources:
+  - agfailovers/status
   - availabilitygroups/status
   - backups/status
   - databases/status

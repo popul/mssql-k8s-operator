@@ -897,6 +897,85 @@ func (m *MockClient) AddListenerToAG(_ context.Context, agName string, listener 
 	return nil
 }
 
+func (m *MockClient) FailoverAG(_ context.Context, agName string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.track("FailoverAG")
+	if err := m.checkConnect(); err != nil {
+		return err
+	}
+	if err := m.checkMethodError("FailoverAG"); err != nil {
+		return err
+	}
+	// Simulate failover by swapping primary
+	if ag, ok := m.ags[agName]; ok {
+		for i := range ag.Replicas {
+			if ag.Replicas[i].Role == "SECONDARY" {
+				// Promote the first secondary
+				for j := range ag.Replicas {
+					if ag.Replicas[j].Role == "PRIMARY" {
+						ag.Replicas[j].Role = "SECONDARY"
+						break
+					}
+				}
+				ag.Replicas[i].Role = "PRIMARY"
+				ag.PrimaryReplica = ag.Replicas[i].ServerName
+				break
+			}
+		}
+	}
+	return nil
+}
+
+func (m *MockClient) ForceFailoverAG(_ context.Context, agName string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.track("ForceFailoverAG")
+	if err := m.checkConnect(); err != nil {
+		return err
+	}
+	if err := m.checkMethodError("ForceFailoverAG"); err != nil {
+		return err
+	}
+	// Same as FailoverAG in mock
+	if ag, ok := m.ags[agName]; ok {
+		for i := range ag.Replicas {
+			if ag.Replicas[i].Role == "SECONDARY" {
+				for j := range ag.Replicas {
+					if ag.Replicas[j].Role == "PRIMARY" {
+						ag.Replicas[j].Role = "SECONDARY"
+						break
+					}
+				}
+				ag.Replicas[i].Role = "PRIMARY"
+				ag.PrimaryReplica = ag.Replicas[i].ServerName
+				break
+			}
+		}
+	}
+	return nil
+}
+
+func (m *MockClient) GetAGReplicaRole(_ context.Context, agName, serverName string) (string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.track("GetAGReplicaRole")
+	if err := m.checkConnect(); err != nil {
+		return "", err
+	}
+	if err := m.checkMethodError("GetAGReplicaRole"); err != nil {
+		return "", err
+	}
+	if ag, ok := m.ags[agName]; ok {
+		for _, r := range ag.Replicas {
+			if r.ServerName == serverName {
+				return r.Role, nil
+			}
+		}
+	}
+	return "", fmt.Errorf("replica %s not found in AG %s", serverName, agName)
+}
+
 func (m *MockClient) DropAG(_ context.Context, agName string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
