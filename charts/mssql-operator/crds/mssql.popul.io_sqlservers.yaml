@@ -4,26 +4,35 @@ kind: CustomResourceDefinition
 metadata:
   annotations:
     controller-gen.kubebuilder.io/version: v0.17.2
-  name: databases.mssql.popul.io
+  name: sqlservers.mssql.popul.io
 spec:
   group: mssql.popul.io
   names:
     categories:
     - mssql
-    kind: Database
-    listKind: DatabaseList
-    plural: databases
+    kind: SQLServer
+    listKind: SQLServerList
+    plural: sqlservers
     shortNames:
-    - msdb
-    singular: database
+    - mssrv
+    singular: sqlserver
   scope: Namespaced
   versions:
   - additionalPrinterColumns:
-    - jsonPath: .spec.databaseName
-      name: Database
+    - jsonPath: .spec.host
+      name: Host
+      type: string
+    - jsonPath: .spec.port
+      name: Port
+      type: integer
+    - jsonPath: .spec.authMethod
+      name: Auth
       type: string
     - jsonPath: .status.conditions[?(@.type=="Ready")].status
       name: Ready
+      type: string
+    - jsonPath: .status.serverVersion
+      name: Version
       type: string
     - jsonPath: .metadata.creationTimestamp
       name: Age
@@ -31,7 +40,9 @@ spec:
     name: v1alpha1
     schema:
       openAPIV3Schema:
-        description: Database is the Schema for the databases API.
+        description: |-
+          SQLServer is the Schema for the sqlservers API.
+          It defines a shared SQL Server connection that other CRDs can reference via serverRef.
         properties:
           apiVersion:
             description: |-
@@ -51,107 +62,114 @@ spec:
           metadata:
             type: object
           spec:
-            description: DatabaseSpec defines the desired state of a SQL Server database.
+            description: SQLServerSpec defines the desired state of a shared SQL Server
+              connection reference.
             properties:
-              collation:
-                description: Collation for the database. Immutable after creation.
-                type: string
-              compatibilityLevel:
-                description: CompatibilityLevel sets the database compatibility level
-                  (e.g. 160 for SQL 2022).
-                format: int32
-                maximum: 170
-                minimum: 100
-                type: integer
-              databaseName:
-                description: DatabaseName is the name of the database on SQL Server.
-                minLength: 1
-                type: string
-              deletionPolicy:
-                default: Retain
-                description: DeletionPolicy determines whether to DROP or RETAIN the
-                  database on CR deletion.
+              authMethod:
+                default: SqlLogin
+                description: AuthMethod defines the authentication method. Defaults
+                  to SqlLogin.
                 enum:
-                - Delete
-                - Retain
+                - SqlLogin
+                - AzureAD
+                - ManagedIdentity
                 type: string
-              options:
-                description: Options sets database-level options (e.g. ALLOW_SNAPSHOT_ISOLATION).
-                items:
-                  description: DatabaseOption represents a boolean database option
-                    (SET ON/OFF).
-                  properties:
-                    name:
-                      description: Name is the database option name (e.g. ALLOW_SNAPSHOT_ISOLATION,
-                        READ_COMMITTED_SNAPSHOT).
-                      minLength: 1
-                      type: string
-                    value:
-                      description: Value enables or disables the option.
-                      type: boolean
-                  required:
-                  - name
-                  - value
-                  type: object
-                type: array
-              owner:
-                description: Owner sets the database owner (ALTER AUTHORIZATION).
-                type: string
-              recoveryModel:
+              azureAD:
                 description: |-
-                  RecoveryModel sets the database recovery model (Full, Simple, BulkLogged).
-                  Full is required for transaction log backups and point-in-time restore.
-                enum:
-                - Full
-                - Simple
-                - BulkLogged
-                type: string
-              server:
-                description: Server defines the SQL Server connection details.
+                  AzureAD contains Azure AD authentication configuration.
+                  Required when authMethod is AzureAD.
                 properties:
-                  credentialsSecret:
-                    description: |-
-                      CredentialsSecret references a Secret containing "username" and "password" keys.
-                      Required when sqlServerRef is not set and authMethod is SqlLogin.
+                  clientID:
+                    description: ClientID is the Azure AD application (client) ID.
+                    minLength: 1
+                    type: string
+                  clientSecretRef:
+                    description: ClientSecretRef references a Secret containing the
+                      "clientSecret" key.
                     properties:
                       name:
                         description: Name of the Secret.
                         minLength: 1
                         type: string
+                      namespace:
+                        description: Namespace of the Secret. If empty, defaults to
+                          the namespace of the referencing resource.
+                        type: string
                     required:
                     - name
                     type: object
-                  host:
-                    description: |-
-                      Host is the hostname or IP of the SQL Server instance.
-                      Required when sqlServerRef is not set.
+                  tenantID:
+                    description: TenantID is the Azure AD tenant ID.
+                    minLength: 1
                     type: string
-                  port:
-                    default: 1433
-                    description: Port is the port number. Defaults to 1433.
-                    format: int32
-                    type: integer
-                  sqlServerRef:
-                    description: |-
-                      SQLServerRef references a SQLServer CR by name. When set, host/port/credentials/tls
-                      are inherited from the SQLServer CR and should not be specified inline.
-                    type: string
-                  tls:
-                    default: false
-                    description: TLS enables TLS encryption for the SQL Server connection.
-                    type: boolean
+                required:
+                - clientID
+                - tenantID
                 type: object
+              connectionTimeout:
+                default: 30
+                description: ConnectionTimeout is the connection timeout in seconds.
+                format: int32
+                maximum: 300
+                minimum: 5
+                type: integer
+              credentialsSecret:
+                description: |-
+                  CredentialsSecret references a Secret containing "username" and "password" keys.
+                  Required when authMethod is SqlLogin.
+                properties:
+                  name:
+                    description: Name of the Secret.
+                    minLength: 1
+                    type: string
+                  namespace:
+                    description: Namespace of the Secret. If empty, defaults to the
+                      namespace of the referencing resource.
+                    type: string
+                required:
+                - name
+                type: object
+              host:
+                description: Host is the hostname or IP of the SQL Server instance.
+                minLength: 1
+                type: string
+              managedIdentity:
+                description: |-
+                  ManagedIdentity contains Managed Identity authentication configuration.
+                  Required when authMethod is ManagedIdentity.
+                properties:
+                  clientID:
+                    description: |-
+                      ClientID is the user-assigned managed identity client ID.
+                      Leave empty for system-assigned identity.
+                    type: string
+                type: object
+              maxConnections:
+                default: 10
+                description: MaxConnections is the maximum number of connections in
+                  the pool for this server.
+                format: int32
+                maximum: 100
+                minimum: 1
+                type: integer
+              port:
+                default: 1433
+                description: Port is the port number. Defaults to 1433.
+                format: int32
+                type: integer
+              tls:
+                default: false
+                description: TLS enables TLS encryption for the SQL Server connection.
+                type: boolean
             required:
-            - databaseName
-            - server
+            - host
             type: object
           status:
-            description: DatabaseStatus defines the observed state of a SQL Server
-              database.
+            description: SQLServerStatus defines the observed state of a SQL Server
+              connection.
             properties:
               conditions:
-                description: Conditions represent the latest available observations
-                  of the database's state.
+                description: Conditions represent the latest available observations.
                 items:
                   description: Condition contains details for one aspect of the current
                     state of this API Resource.
@@ -207,11 +225,24 @@ spec:
                   - type
                   type: object
                 type: array
+              edition:
+                description: Edition is the SQL Server edition (e.g. "Enterprise",
+                  "Standard", "Express").
+                type: string
+              lastConnectedTime:
+                description: LastConnectedTime is when the operator last successfully
+                  connected.
+                format: date-time
+                type: string
               observedGeneration:
                 description: ObservedGeneration is the most recent generation observed
                   by the controller.
                 format: int64
                 type: integer
+              serverVersion:
+                description: ServerVersion is the SQL Server version string (e.g.
+                  "16.0.4135.4").
+                type: string
             type: object
         type: object
     served: true

@@ -163,6 +163,7 @@ func (r *LoginReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 
 	// 8. Status
 	opmetrics.ReconcileTotal.WithLabelValues("Login", "success").Inc()
+	opmetrics.LoginCount.WithLabelValues(login.Name, login.Namespace, login.Spec.LoginName).Set(1)
 
 	patch := client.MergeFrom(login.DeepCopy())
 	login.Status.PasswordSecretResourceVersion = pwSecret.ResourceVersion

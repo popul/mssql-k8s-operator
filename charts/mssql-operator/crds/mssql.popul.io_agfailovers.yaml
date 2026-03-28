@@ -78,8 +78,9 @@ spec:
                 description: Server connection details for the target replica.
                 properties:
                   credentialsSecret:
-                    description: CredentialsSecret references a Secret containing
-                      "username" and "password" keys.
+                    description: |-
+                      CredentialsSecret references a Secret containing "username" and "password" keys.
+                      Required when sqlServerRef is not set and authMethod is SqlLogin.
                     properties:
                       name:
                         description: Name of the Secret.
@@ -89,21 +90,24 @@ spec:
                     - name
                     type: object
                   host:
-                    description: Host is the hostname or IP of the SQL Server instance.
-                    minLength: 1
+                    description: |-
+                      Host is the hostname or IP of the SQL Server instance.
+                      Required when sqlServerRef is not set.
                     type: string
                   port:
                     default: 1433
                     description: Port is the port number. Defaults to 1433.
                     format: int32
                     type: integer
+                  sqlServerRef:
+                    description: |-
+                      SQLServerRef references a SQLServer CR by name. When set, host/port/credentials/tls
+                      are inherited from the SQLServer CR and should not be specified inline.
+                    type: string
                   tls:
                     default: false
                     description: TLS enables TLS encryption for the SQL Server connection.
                     type: boolean
-                required:
-                - credentialsSecret
-                - host
                 type: object
               targetReplica:
                 description: |-

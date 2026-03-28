@@ -1,0 +1,75 @@
+{{- if .Values.metrics.prometheusRule.enabled }}
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: {{ include "mssql-operator.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "mssql-operator.labels" . | nindent 4 }}
+    {{- with .Values.metrics.prometheusRule.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  groups:
+    - name: mssql-operator.rules
+      rules:
+        - alert: MSSQLDatabaseNotReady
+          expr: mssql_database_ready == 0
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "MSSQL Database {{ "{{" }} $labels.database {{ "}}" }} not ready"
+            description: "Database CR {{ "{{" }} $labels.name {{ "}}" }} in namespace {{ "{{" }} $labels.namespace {{ "}}" }} has been not ready for more than 5 minutes."
+
+        - alert: MSSQLBackupOverdue
+          expr: time() - mssql_backup_last_success_timestamp > 90000
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: "MSSQL Backup overdue for {{ "{{" }} $labels.database {{ "}}" }}"
+            description: "No successful backup for scheduled backup {{ "{{" }} $labels.name {{ "}}" }} in namespace {{ "{{" }} $labels.namespace {{ "}}" }} for more than 25 hours."
+
+        - alert: MSSQLBackupFailing
+          expr: increase(mssql_scheduled_backup_total{result="failed"}[24h]) > 2
+          for: 0m
+          labels:
+            severity: warning
+          annotations:
+            summary: "MSSQL Scheduled backup {{ "{{" }} $labels.name {{ "}}" }} failing"
+            description: "More than 2 backup failures in the last 24 hours for {{ "{{" }} $labels.name {{ "}}" }}."
+
+        - alert: MSSQLAGReplicaNotSynchronized
+          expr: mssql_ag_replica_synchronized == 0
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: "MSSQL AG replica {{ "{{" }} $labels.replica {{ "}}" }} not synchronized"
+            description: "AG {{ "{{" }} $labels.ag_name {{ "}}" }} replica {{ "{{" }} $labels.replica {{ "}}" }} has been not synchronized for more than 10 minutes."
+
+        - alert: MSSQLServerDisconnected
+          expr: mssql_server_connected == 0
+          for: 3m
+          labels:
+            severity: critical
+          annotations:
+            summary: "MSSQL Server {{ "{{" }} $labels.host {{ "}}" }} disconnected"
+            description: "Cannot connect to SQL Server {{ "{{" }} $labels.name {{ "}}" }} ({{ "{{" }} $labels.host {{ "}}" }}) for more than 3 minutes."
+
+        - alert: MSSQLOperatorReconcileErrors
+          expr: rate(mssql_operator_reconcile_errors_total[5m]) > 0.1
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "MSSQL Operator {{ "{{" }} $labels.controller {{ "}}" }} reconcile errors"
+            description: "Controller {{ "{{" }} $labels.controller {{ "}}" }} is experiencing sustained reconciliation errors."
+
+    {{- with .Values.metrics.prometheusRule.additionalRules }}
+    - name: mssql-operator.custom
+      rules:
+        {{- toYaml . | nindent 8 }}
+    {{- end }}
+{{- end }}

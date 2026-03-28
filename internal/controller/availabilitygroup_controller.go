@@ -347,6 +347,11 @@ func (r *AvailabilityGroupReconciler) updateAGStatus(ctx context.Context, ag *v1
 			SynchronizationState: rs.SynchronizationState,
 			Connected:            rs.Connected,
 		}
+		synced := float64(0)
+		if rs.SynchronizationState == "SYNCHRONIZED" || rs.SynchronizationState == "SYNCHRONIZING" {
+			synced = 1
+		}
+		opmetrics.AGReplicaLag.WithLabelValues(ag.Spec.AGName, ag.Namespace, rs.ServerName, rs.Role).Set(synced)
 	}
 
 	// Map database states

@@ -61,8 +61,9 @@ spec:
                 description: Server defines the SQL Server connection details.
                 properties:
                   credentialsSecret:
-                    description: CredentialsSecret references a Secret containing
-                      "username" and "password" keys.
+                    description: |-
+                      CredentialsSecret references a Secret containing "username" and "password" keys.
+                      Required when sqlServerRef is not set and authMethod is SqlLogin.
                     properties:
                       name:
                         description: Name of the Secret.
@@ -72,26 +73,58 @@ spec:
                     - name
                     type: object
                   host:
-                    description: Host is the hostname or IP of the SQL Server instance.
-                    minLength: 1
+                    description: |-
+                      Host is the hostname or IP of the SQL Server instance.
+                      Required when sqlServerRef is not set.
                     type: string
                   port:
                     default: 1433
                     description: Port is the port number. Defaults to 1433.
                     format: int32
                     type: integer
+                  sqlServerRef:
+                    description: |-
+                      SQLServerRef references a SQLServer CR by name. When set, host/port/credentials/tls
+                      are inherited from the SQLServer CR and should not be specified inline.
+                    type: string
                   tls:
                     default: false
                     description: TLS enables TLS encryption for the SQL Server connection.
                     type: boolean
-                required:
-                - credentialsSecret
-                - host
                 type: object
               source:
                 description: Source is the backup file path on the SQL Server filesystem.
                 minLength: 1
                 type: string
+              stopAt:
+                description: |-
+                  StopAt specifies a point-in-time for the restore (ISO 8601 format: "2024-01-15T14:30:00").
+                  Requires a Full backup + subsequent Log backups. The restore recovers the database
+                  to the state as of this timestamp.
+                type: string
+              withMove:
+                description: |-
+                  WithMove specifies file relocations for the restore (RESTORE ... WITH MOVE).
+                  Use this when restoring to a different server with different file paths.
+                items:
+                  description: FileMapping defines a logical-to-physical file move
+                    for RESTORE WITH MOVE.
+                  properties:
+                    logicalName:
+                      description: LogicalName is the logical name of the database
+                        file in the backup.
+                      minLength: 1
+                      type: string
+                    physicalPath:
+                      description: PhysicalPath is the target physical path on the
+                        SQL Server filesystem.
+                      minLength: 1
+                      type: string
+                  required:
+                  - logicalName
+                  - physicalPath
+                  type: object
+                type: array
             required:
             - databaseName
             - server

@@ -56,6 +56,11 @@ metrics:
     enabled: false
     interval: "30s"
     labels: {}
+  prometheusRule:
+    enabled: false
+    labels: {}
+    # additionalRules allows custom alert rules to be added
+    additionalRules: []
 
 health:
   port: 8081

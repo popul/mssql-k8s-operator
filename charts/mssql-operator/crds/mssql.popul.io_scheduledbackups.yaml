@@ -4,24 +4,33 @@ kind: CustomResourceDefinition
 metadata:
   annotations:
     controller-gen.kubebuilder.io/version: v0.17.2
-  name: databases.mssql.popul.io
+  name: scheduledbackups.mssql.popul.io
 spec:
   group: mssql.popul.io
   names:
     categories:
     - mssql
-    kind: Database
-    listKind: DatabaseList
-    plural: databases
+    kind: ScheduledBackup
+    listKind: ScheduledBackupList
+    plural: scheduledbackups
     shortNames:
-    - msdb
-    singular: database
+    - msschedbak
+    singular: scheduledbackup
   scope: Namespaced
   versions:
   - additionalPrinterColumns:
     - jsonPath: .spec.databaseName
       name: Database
       type: string
+    - jsonPath: .spec.schedule
+      name: Schedule
+      type: string
+    - jsonPath: .spec.suspend
+      name: Suspend
+      type: boolean
+    - jsonPath: .status.lastScheduleTime
+      name: Last
+      type: date
     - jsonPath: .status.conditions[?(@.type=="Ready")].status
       name: Ready
       type: string
@@ -31,7 +40,7 @@ spec:
     name: v1alpha1
     schema:
       openAPIV3Schema:
-        description: Database is the Schema for the databases API.
+        description: ScheduledBackup is the Schema for the scheduledbackups API.
         properties:
           apiVersion:
             description: |-
@@ -51,60 +60,44 @@ spec:
           metadata:
             type: object
           spec:
-            description: DatabaseSpec defines the desired state of a SQL Server database.
+            description: ScheduledBackupSpec defines the desired state of a ScheduledBackup.
             properties:
-              collation:
-                description: Collation for the database. Immutable after creation.
-                type: string
-              compatibilityLevel:
-                description: CompatibilityLevel sets the database compatibility level
-                  (e.g. 160 for SQL 2022).
-                format: int32
-                maximum: 170
-                minimum: 100
-                type: integer
+              compression:
+                default: false
+                description: Compression enables backup compression.
+                type: boolean
               databaseName:
-                description: DatabaseName is the name of the database on SQL Server.
+                description: DatabaseName is the database to back up.
                 minLength: 1
                 type: string
-              deletionPolicy:
-                default: Retain
-                description: DeletionPolicy determines whether to DROP or RETAIN the
-                  database on CR deletion.
-                enum:
-                - Delete
-                - Retain
-                type: string
-              options:
-                description: Options sets database-level options (e.g. ALLOW_SNAPSHOT_ISOLATION).
-                items:
-                  description: DatabaseOption represents a boolean database option
-                    (SET ON/OFF).
-                  properties:
-                    name:
-                      description: Name is the database option name (e.g. ALLOW_SNAPSHOT_ISOLATION,
-                        READ_COMMITTED_SNAPSHOT).
-                      minLength: 1
-                      type: string
-                    value:
-                      description: Value enables or disables the option.
-                      type: boolean
-                  required:
-                  - name
-                  - value
-                  type: object
-                type: array
-              owner:
-                description: Owner sets the database owner (ALTER AUTHORIZATION).
-                type: string
-              recoveryModel:
+              destinationTemplate:
                 description: |-
-                  RecoveryModel sets the database recovery model (Full, Simple, BulkLogged).
-                  Full is required for transaction log backups and point-in-time restore.
-                enum:
-                - Full
-                - Simple
-                - BulkLogged
+                  DestinationTemplate is a Go template for the backup file path.
+                  Available variables: {{.DatabaseName}}, {{.Timestamp}}, {{.Type}}.
+                  Example: /backups/{{.DatabaseName}}-{{.Timestamp}}.bak
+                minLength: 1
+                type: string
+              retention:
+                description: Retention defines the retention policy for old backups.
+                properties:
+                  maxAge:
+                    description: |-
+                      MaxAge is the maximum age of a backup to retain (e.g. "168h" for 7 days).
+                      Backups older than this are deleted.
+                    type: string
+                  maxCount:
+                    description: |-
+                      MaxCount is the maximum number of successful backups to retain.
+                      Older backups beyond this count are deleted. 0 means unlimited.
+                    format: int32
+                    minimum: 0
+                    type: integer
+                type: object
+              schedule:
+                description: |-
+                  Schedule is a cron expression (e.g. "0 2 * * *" for 2 AM daily).
+                  Uses standard 5-field cron format.
+                minLength: 1
                 type: string
               server:
                 description: Server defines the SQL Server connection details.
@@ -141,17 +134,34 @@ spec:
                     description: TLS enables TLS encryption for the SQL Server connection.
                     type: boolean
                 type: object
+              suspend:
+                default: false
+                description: Suspend stops the schedule from creating new backups
+                  when true.
+                type: boolean
+              type:
+                default: Full
+                description: 'Type is the backup type: Full, Differential, or Log.'
+                enum:
+                - Full
+                - Differential
+                - Log
+                type: string
             required:
             - databaseName
+            - destinationTemplate
+            - schedule
             - server
             type: object
           status:
-            description: DatabaseStatus defines the observed state of a SQL Server
-              database.
+            description: ScheduledBackupStatus defines the observed state of a ScheduledBackup.
             properties:
+              activeBackup:
+                description: ActiveBackup is the name of the currently running Backup
+                  CR, if any.
+                type: string
               conditions:
-                description: Conditions represent the latest available observations
-                  of the database's state.
+                description: Conditions represent the latest available observations.
                 items:
                   description: Condition contains details for one aspect of the current
                     state of this API Resource.
@@ -207,10 +217,63 @@ spec:
                   - type
                   type: object
                 type: array
+              failedBackups:
+                description: FailedBackups is the number of failed backups.
+                format: int32
+                type: integer
+              history:
+                description: History contains the last N backup executions.
+                items:
+                  description: ScheduledBackupHistory records a single backup execution.
+                  properties:
+                    backupName:
+                      description: BackupName is the name of the generated Backup
+                        CR.
+                      type: string
+                    completionTime:
+                      description: CompletionTime is when this backup completed.
+                      format: date-time
+                      type: string
+                    destination:
+                      description: Destination is the file path of the backup.
+                      type: string
+                    phase:
+                      description: Phase is the final phase of this backup.
+                      type: string
+                    startTime:
+                      description: StartTime is when this backup started.
+                      format: date-time
+                      type: string
+                  required:
+                  - backupName
+                  type: object
+                type: array
+              lastScheduleTime:
+                description: LastScheduleTime is the last time a Backup was created
+                  from this schedule.
+                format: date-time
+                type: string
+              lastSuccessfulBackup:
+                description: LastSuccessfulBackup is the name of the last successfully
+                  completed Backup.
+                type: string
+              nextScheduleTime:
+                description: NextScheduleTime is the next time a Backup will be created.
+                format: date-time
+                type: string
               observedGeneration:
                 description: ObservedGeneration is the most recent generation observed
                   by the controller.
                 format: int64
+                type: integer
+              successfulBackups:
+                description: SuccessfulBackups is the number of successful backups.
+                format: int32
+                type: integer
+              totalBackups:
+                description: TotalBackups is the total number of backups created by
+                  this schedule.
+                format: int32
                 type: integer
             type: object
         type: object

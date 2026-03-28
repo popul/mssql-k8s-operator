@@ -99,11 +99,24 @@ func (r *RestoreReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		}
 	}
 
-	// 6. Execute restore
+	// 6. Execute restore (with optional PIT and file moves)
 	sqlCtx, cancel := sqlContext(ctx)
 	defer cancel()
 
-	if err := sqlClient.RestoreDatabase(sqlCtx, restore.Spec.DatabaseName, restore.Spec.Source); err != nil {
+	var restoreErr error
+	if restore.Spec.StopAt != nil {
+		restoreErr = sqlClient.RestoreDatabasePIT(sqlCtx, restore.Spec.DatabaseName, restore.Spec.Source, *restore.Spec.StopAt)
+	} else if len(restore.Spec.WithMove) > 0 {
+		moves := make(map[string]string, len(restore.Spec.WithMove))
+		for _, m := range restore.Spec.WithMove {
+			moves[m.LogicalName] = m.PhysicalPath
+		}
+		restoreErr = sqlClient.RestoreDatabaseWithMove(sqlCtx, restore.Spec.DatabaseName, restore.Spec.Source, moves)
+	} else {
+		restoreErr = sqlClient.RestoreDatabase(sqlCtx, restore.Spec.DatabaseName, restore.Spec.Source)
+	}
+
+	if err := restoreErr; err != nil {
 		r.Recorder.Event(&restore, corev1.EventTypeWarning, "RestoreFailed", err.Error())
 		opmetrics.ReconcileErrors.WithLabelValues("Restore", "RestoreFailed").Inc()
 		return r.setRestoreStatus(ctx, &restore, v1alpha1.RestorePhaseFailed, metav1.ConditionFalse, "RestoreFailed",

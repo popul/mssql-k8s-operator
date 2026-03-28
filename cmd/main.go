@@ -164,6 +164,26 @@ func main() {
 		os.Exit(1)
 	}
 
+	if err := (&controller.SQLServerReconciler{
+		Client:           mgr.GetClient(),
+		Scheme:           mgr.GetScheme(),
+		Recorder:         mgr.GetEventRecorderFor("sqlserver-controller"),
+		SQLClientFactory: sqlFactory,
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "SQLServer")
+		os.Exit(1)
+	}
+
+	if err := (&controller.ScheduledBackupReconciler{
+		Client:           mgr.GetClient(),
+		Scheme:           mgr.GetScheme(),
+		Recorder:         mgr.GetEventRecorderFor("scheduledbackup-controller"),
+		SQLClientFactory: sqlFactory,
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "ScheduledBackup")
+		os.Exit(1)
+	}
+
 	if enableWebhooks {
 		setupLog.Info("registering webhooks")
 		// Webhooks are registered via the types' Default/Validate methods.

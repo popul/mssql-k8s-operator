@@ -41,6 +41,26 @@ func getCredentialsFromSecret(ctx context.Context, c client.Client, namespace, s
 	return string(username), string(password), nil
 }
 
+// getSecretValue reads a specific key from a Secret, supporting cross-namespace references.
+func getSecretValue(ctx context.Context, c client.Client, namespace string, ref *v1alpha1.CrossNamespaceSecretReference, key string) (string, error) {
+	if ref == nil {
+		return "", fmt.Errorf("secret reference is nil")
+	}
+	ns := namespace
+	if ref.Namespace != nil {
+		ns = *ref.Namespace
+	}
+	var secret corev1.Secret
+	if err := c.Get(ctx, types.NamespacedName{Name: ref.Name, Namespace: ns}, &secret); err != nil {
+		return "", err
+	}
+	val, ok := secret.Data[key]
+	if !ok {
+		return "", fmt.Errorf("secret %q in namespace %q missing key %q", ref.Name, ns, key)
+	}
+	return string(val), nil
+}
+
 // connectToSQL creates a SQL client from a ServerReference, credentials, and factory.
 func connectToSQL(server v1alpha1.ServerReference, username, password string, factory sqlclient.ClientFactory) (sqlclient.SQLClient, error) {
 	port := int32(1433)

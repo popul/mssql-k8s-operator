@@ -93,6 +93,7 @@ func (r *SQLServerReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 	if err != nil {
 		logger.Error(err, "failed to connect to SQL Server")
 		r.Recorder.Event(&srv, corev1.EventTypeWarning, v1alpha1.ReasonConnectionFailed, err.Error())
+		opmetrics.SQLServerConnected.WithLabelValues(srv.Name, srv.Namespace, srv.Spec.Host).Set(0)
 		return ctrl.Result{}, fmt.Errorf("failed to connect to SQL Server: %w", err)
 	}
 	defer sqlConn.Close()
@@ -130,6 +131,7 @@ func (r *SQLServerReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 	}
 
 	opmetrics.ReconcileTotal.WithLabelValues("SQLServer", "success").Inc()
+	opmetrics.SQLServerConnected.WithLabelValues(srv.Name, srv.Namespace, srv.Spec.Host).Set(1)
 	return ctrl.Result{RequeueAfter: requeueWithJitter(60 * time.Second)}, nil
 }
 

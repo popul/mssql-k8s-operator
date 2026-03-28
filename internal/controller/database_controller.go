@@ -215,6 +215,7 @@ func (r *DatabaseReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 
 	// 7. Status: Ready=True
 	opmetrics.ReconcileTotal.WithLabelValues("Database", "success").Inc()
+	opmetrics.DatabaseState.WithLabelValues(db.Name, db.Namespace, db.Spec.DatabaseName, db.Spec.Server.Host).Set(1)
 	return r.setConditionAndReturn(ctx, &db, metav1.ConditionTrue, v1alpha1.ReasonReady,
 		fmt.Sprintf("Database %s is ready", db.Spec.DatabaseName))
 }

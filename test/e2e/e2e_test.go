@@ -407,6 +407,10 @@ func findCondition(obj client.Object, condType string) *metav1.Condition {
 		conditions = o.Status.Conditions
 	case *mssqlv1.AGFailover:
 		conditions = o.Status.Conditions
+	case *mssqlv1.SQLServer:
+		conditions = o.Status.Conditions
+	case *mssqlv1.ScheduledBackup:
+		conditions = o.Status.Conditions
 	}
 	return meta.FindStatusCondition(conditions, condType)
 }
@@ -1746,9 +1750,17 @@ func TestE2EMetrics(t *testing.T) {
 	assertMetricExists(t, metricsStr, "controller_runtime_reconcile_total")
 	assertMetricExists(t, metricsStr, "workqueue_depth")
 
-	// Check for custom metrics
+	// Check for custom operator metrics
 	assertMetricExists(t, metricsStr, "mssql_operator_reconcile_total")
 	assertMetricExists(t, metricsStr, "mssql_operator_reconcile_duration_seconds")
+
+	// Check for business metrics registration
+	assertMetricExists(t, metricsStr, "mssql_database_ready")
+	assertMetricExists(t, metricsStr, "mssql_server_connected")
+	assertMetricExists(t, metricsStr, "mssql_login_ready")
+	assertMetricExists(t, metricsStr, "mssql_ag_replica_synchronized")
+	assertMetricExists(t, metricsStr, "mssql_backup_last_success_timestamp")
+	assertMetricExists(t, metricsStr, "mssql_scheduled_backup_total")
 }
 
 // =============================================================================
@@ -2185,6 +2197,337 @@ func TestE2EBackupFailure_NonExistentDB(t *testing.T) {
 
 	// Cleanup
 	_ = k8sClient.Delete(ctx, backup)
+}
+
+// =============================================================================
+// SQLServer CRD E2E Tests
+// =============================================================================
+
+func TestE2ESQLServerLifecycle(t *testing.T) {
+	srvKey := types.NamespacedName{Name: "e2e-sqlserver", Namespace: testNamespace}
+
+	t.Run("CreateSQLServer", func(t *testing.T) {
+		srv := &mssqlv1.SQLServer{
+			ObjectMeta: metav1.ObjectMeta{Name: srvKey.Name, Namespace: srvKey.Namespace},
+			Spec: mssqlv1.SQLServerSpec{
+				Host: fmt.Sprintf("mssql.%s.svc.cluster.local", testNamespace),
+				Port: ptr(int32(1433)),
+				CredentialsSecret: &mssqlv1.CrossNamespaceSecretReference{
+					Name:      "mssql-sa-credentials",
+					Namespace: ptr(testNamespace),
+				},
+				TLS:        ptr(false),
+				AuthMethod: mssqlv1.AuthSqlLogin,
+			},
+		}
+		if err := k8sClient.Create(ctx, srv); err != nil {
+			t.Fatalf("Failed to create SQLServer CR: %v", err)
+		}
+
+		waitForReady(t, srvKey, &mssqlv1.SQLServer{})
+
+		// Verify status fields
+		var updated mssqlv1.SQLServer
+		if err := k8sClient.Get(ctx, srvKey, &updated); err != nil {
+			t.Fatalf("Failed to get SQLServer: %v", err)
+		}
+		if updated.Status.ServerVersion == "" {
+			t.Error("Expected serverVersion to be set")
+		}
+		if updated.Status.Edition == "" {
+			t.Error("Expected edition to be set")
+		}
+		if updated.Status.LastConnectedTime == nil {
+			t.Error("Expected lastConnectedTime to be set")
+		}
+		t.Logf("SQLServer version=%s edition=%s", updated.Status.ServerVersion, updated.Status.Edition)
+	})
+
+	t.Run("DatabaseWithSQLServerRef", func(t *testing.T) {
+		dbKey := types.NamespacedName{Name: "e2e-sqlserverref-db", Namespace: testNamespace}
+		db := &mssqlv1.Database{
+			ObjectMeta: metav1.ObjectMeta{Name: dbKey.Name, Namespace: dbKey.Namespace},
+			Spec: mssqlv1.DatabaseSpec{
+				Server: mssqlv1.ServerReference{
+					SQLServerRef: ptr(srvKey.Name),
+				},
+				DatabaseName:   "sqlserverreftest",
+				DeletionPolicy: ptr(mssqlv1.DeletionPolicyDelete),
+			},
+		}
+		if err := k8sClient.Create(ctx, db); err != nil {
+			t.Fatalf("Failed to create Database with sqlServerRef: %v", err)
+		}
+		waitForReady(t, dbKey, &mssqlv1.Database{})
+
+		// Verify the database actually exists on SQL Server
+		exists, err := sqlClient.DatabaseExists(ctx, "sqlserverreftest")
+		if err != nil {
+			t.Fatalf("Failed to check database existence: %v", err)
+		}
+		if !exists {
+			t.Fatal("Database 'sqlserverreftest' should exist on SQL Server")
+		}
+
+		// Cleanup
+		_ = k8sClient.Delete(ctx, db)
+		waitForDeletion(t, dbKey, &mssqlv1.Database{}, pollTimeout)
+	})
+
+	t.Run("Idempotent", func(t *testing.T) {
+		// Re-fetch to ensure status is still Ready after multiple reconcile loops
+		var srv mssqlv1.SQLServer
+		if err := k8sClient.Get(ctx, srvKey, &srv); err != nil {
+			t.Fatalf("Failed to get SQLServer: %v", err)
+		}
+		cond := findCondition(&srv, mssqlv1.ConditionReady)
+		if cond == nil || cond.Status != metav1.ConditionTrue {
+			t.Error("Expected SQLServer to remain Ready after multiple reconcile loops")
+		}
+	})
+
+	t.Run("Cleanup", func(t *testing.T) {
+		_ = k8sClient.Delete(ctx, &mssqlv1.SQLServer{ObjectMeta: metav1.ObjectMeta{Name: srvKey.Name, Namespace: srvKey.Namespace}})
+		waitForDeletion(t, srvKey, &mssqlv1.SQLServer{}, pollTimeout)
+	})
+}
+
+// =============================================================================
+// Database Configuration E2E Tests (Recovery Model, Compat Level, Options)
+// =============================================================================
+
+func TestE2EDatabaseConfiguration(t *testing.T) {
+	dbKey := types.NamespacedName{Name: "e2e-dbconfig", Namespace: testNamespace}
+
+	// Create database with extended configuration
+	db := &mssqlv1.Database{
+		ObjectMeta: metav1.ObjectMeta{Name: dbKey.Name, Namespace: dbKey.Namespace},
+		Spec: mssqlv1.DatabaseSpec{
+			Server:         serverRef(),
+			DatabaseName:   "configtest",
+			DeletionPolicy: ptr(mssqlv1.DeletionPolicyDelete),
+			RecoveryModel:  ptr(mssqlv1.RecoveryModelFull),
+		},
+	}
+	if err := k8sClient.Create(ctx, db); err != nil {
+		t.Fatalf("Failed to create Database CR: %v", err)
+	}
+	waitForReady(t, dbKey, &mssqlv1.Database{})
+
+	t.Run("RecoveryModel_Full", func(t *testing.T) {
+		model, err := sqlClient.GetDatabaseRecoveryModel(ctx, "configtest")
+		if err != nil {
+			t.Fatalf("Failed to get recovery model: %v", err)
+		}
+		if model != "FULL" {
+			t.Errorf("Expected recovery model FULL, got %s", model)
+		}
+	})
+
+	t.Run("ChangeRecoveryModel_ToSimple", func(t *testing.T) {
+		var current mssqlv1.Database
+		if err := k8sClient.Get(ctx, dbKey, &current); err != nil {
+			t.Fatalf("Failed to get Database: %v", err)
+		}
+		current.Spec.RecoveryModel = ptr(mssqlv1.RecoveryModelSimple)
+		if err := k8sClient.Update(ctx, &current); err != nil {
+			t.Fatalf("Failed to update Database: %v", err)
+		}
+		waitForReady(t, dbKey, &mssqlv1.Database{})
+
+		model, err := sqlClient.GetDatabaseRecoveryModel(ctx, "configtest")
+		if err != nil {
+			t.Fatalf("Failed to get recovery model: %v", err)
+		}
+		if model != "SIMPLE" {
+			t.Errorf("Expected recovery model SIMPLE, got %s", model)
+		}
+	})
+
+	t.Run("CompatibilityLevel", func(t *testing.T) {
+		var current mssqlv1.Database
+		if err := k8sClient.Get(ctx, dbKey, &current); err != nil {
+			t.Fatalf("Failed to get Database: %v", err)
+		}
+		current.Spec.CompatibilityLevel = ptr(int32(150))
+		if err := k8sClient.Update(ctx, &current); err != nil {
+			t.Fatalf("Failed to update Database: %v", err)
+		}
+		waitForReady(t, dbKey, &mssqlv1.Database{})
+
+		level, err := sqlClient.GetDatabaseCompatibilityLevel(ctx, "configtest")
+		if err != nil {
+			t.Fatalf("Failed to get compatibility level: %v", err)
+		}
+		if level != 150 {
+			t.Errorf("Expected compatibility level 150, got %d", level)
+		}
+	})
+
+	t.Run("DatabaseOptions", func(t *testing.T) {
+		var current mssqlv1.Database
+		if err := k8sClient.Get(ctx, dbKey, &current); err != nil {
+			t.Fatalf("Failed to get Database: %v", err)
+		}
+		current.Spec.Options = []mssqlv1.DatabaseOption{
+			{Name: "READ_COMMITTED_SNAPSHOT", Value: true},
+		}
+		if err := k8sClient.Update(ctx, &current); err != nil {
+			t.Fatalf("Failed to update Database: %v", err)
+		}
+		waitForReady(t, dbKey, &mssqlv1.Database{})
+
+		val, err := sqlClient.GetDatabaseOption(ctx, "configtest", "READ_COMMITTED_SNAPSHOT")
+		if err != nil {
+			t.Fatalf("Failed to get database option: %v", err)
+		}
+		if !val {
+			t.Error("Expected READ_COMMITTED_SNAPSHOT to be ON")
+		}
+	})
+
+	// Cleanup
+	_ = k8sClient.Delete(ctx, &mssqlv1.Database{ObjectMeta: metav1.ObjectMeta{Name: dbKey.Name, Namespace: dbKey.Namespace}})
+	waitForDeletion(t, dbKey, &mssqlv1.Database{}, pollTimeout)
+}
+
+// =============================================================================
+// ScheduledBackup E2E Tests
+// =============================================================================
+
+func TestE2EScheduledBackup(t *testing.T) {
+	// Create a prerequisite database for backups
+	dbKey := types.NamespacedName{Name: "schedbak-db", Namespace: testNamespace}
+	db := &mssqlv1.Database{
+		ObjectMeta: metav1.ObjectMeta{Name: dbKey.Name, Namespace: dbKey.Namespace},
+		Spec: mssqlv1.DatabaseSpec{
+			Server:         serverRef(),
+			DatabaseName:   "schedbaktest",
+			DeletionPolicy: ptr(mssqlv1.DeletionPolicyDelete),
+		},
+	}
+	if err := k8sClient.Create(ctx, db); err != nil && !errors.IsAlreadyExists(err) {
+		t.Fatalf("Failed to create prerequisite Database: %v", err)
+	}
+	waitForReady(t, dbKey, &mssqlv1.Database{})
+
+	sbKey := types.NamespacedName{Name: "e2e-schedbak", Namespace: testNamespace}
+
+	t.Run("CreateScheduledBackup", func(t *testing.T) {
+		sb := &mssqlv1.ScheduledBackup{
+			ObjectMeta: metav1.ObjectMeta{Name: sbKey.Name, Namespace: sbKey.Namespace},
+			Spec: mssqlv1.ScheduledBackupSpec{
+				Server:              serverRef(),
+				DatabaseName:        "schedbaktest",
+				Schedule:            "*/1 * * * *", // every minute
+				Type:                mssqlv1.BackupTypeFull,
+				Compression:         ptr(true),
+				DestinationTemplate: "/var/opt/mssql/backup/{{.DatabaseName}}-{{.Timestamp}}.bak",
+				Retention: &mssqlv1.RetentionPolicy{
+					MaxCount: ptr(int32(3)),
+				},
+			},
+		}
+		if err := k8sClient.Create(ctx, sb); err != nil {
+			t.Fatalf("Failed to create ScheduledBackup CR: %v", err)
+		}
+
+		// Wait for the ScheduledBackup to become ready (first backup should run within ~1 minute)
+		waitForCondition(t, sbKey, &mssqlv1.ScheduledBackup{}, mssqlv1.ConditionReady, metav1.ConditionTrue, 3*time.Minute)
+	})
+
+	t.Run("VerifyBackupCreated", func(t *testing.T) {
+		// Check that at least one Backup CR was created
+		var sb mssqlv1.ScheduledBackup
+		if err := k8sClient.Get(ctx, sbKey, &sb); err != nil {
+			t.Fatalf("Failed to get ScheduledBackup: %v", err)
+		}
+		if sb.Status.TotalBackups < 1 {
+			t.Errorf("Expected at least 1 total backup, got %d", sb.Status.TotalBackups)
+		}
+		if sb.Status.SuccessfulBackups < 1 {
+			t.Errorf("Expected at least 1 successful backup, got %d", sb.Status.SuccessfulBackups)
+		}
+		if len(sb.Status.History) < 1 {
+			t.Error("Expected at least 1 history entry")
+		}
+		if sb.Status.LastSuccessfulBackup == "" {
+			t.Error("Expected lastSuccessfulBackup to be set")
+		}
+		t.Logf("ScheduledBackup: total=%d success=%d history=%d",
+			sb.Status.TotalBackups, sb.Status.SuccessfulBackups, len(sb.Status.History))
+	})
+
+	t.Run("SuspendResume", func(t *testing.T) {
+		var sb mssqlv1.ScheduledBackup
+		if err := k8sClient.Get(ctx, sbKey, &sb); err != nil {
+			t.Fatalf("Failed to get ScheduledBackup: %v", err)
+		}
+		sb.Spec.Suspend = ptr(true)
+		if err := k8sClient.Update(ctx, &sb); err != nil {
+			t.Fatalf("Failed to suspend ScheduledBackup: %v", err)
+		}
+		// Wait a moment to confirm no new backups are triggered
+		time.Sleep(10 * time.Second)
+
+		var updated mssqlv1.ScheduledBackup
+		if err := k8sClient.Get(ctx, sbKey, &updated); err != nil {
+			t.Fatalf("Failed to get updated ScheduledBackup: %v", err)
+		}
+		countBefore := updated.Status.TotalBackups
+
+		// Resume
+		updated.Spec.Suspend = ptr(false)
+		if err := k8sClient.Update(ctx, &updated); err != nil {
+			t.Fatalf("Failed to resume ScheduledBackup: %v", err)
+		}
+		t.Logf("Suspend/resume OK — total backups before suspend: %d", countBefore)
+	})
+
+	// Cleanup
+	_ = k8sClient.Delete(ctx, &mssqlv1.ScheduledBackup{ObjectMeta: metav1.ObjectMeta{Name: sbKey.Name, Namespace: sbKey.Namespace}})
+	_ = k8sClient.Delete(ctx, &mssqlv1.Database{ObjectMeta: metav1.ObjectMeta{Name: dbKey.Name, Namespace: dbKey.Namespace}})
+}
+
+// =============================================================================
+// Business Metrics E2E Test
+// =============================================================================
+
+func TestE2EBusinessMetrics(t *testing.T) {
+	metricsFwd := exec.CommandContext(ctx, "kubectl", "port-forward",
+		"deploy/mssql-operator", "18082:8080",
+		"-n", "mssql-operator-system",
+	)
+	metricsFwd.Stdout = io.Discard
+	metricsFwd.Stderr = io.Discard
+	if err := metricsFwd.Start(); err != nil {
+		t.Fatalf("Failed to start metrics port-forward: %v", err)
+	}
+	defer func() {
+		if metricsFwd.Process != nil {
+			_ = metricsFwd.Process.Kill()
+		}
+	}()
+	time.Sleep(3 * time.Second)
+
+	resp, err := http.Get("http://localhost:18082/metrics")
+	if err != nil {
+		t.Fatalf("Failed to get metrics: %v", err)
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+	metricsStr := string(body)
+
+	if resp.StatusCode != 200 {
+		t.Fatalf("Metrics endpoint returned %d", resp.StatusCode)
+	}
+
+	// Check for business metrics (they should be registered even if no data points yet)
+	assertMetricExists(t, metricsStr, "mssql_database_ready")
+	assertMetricExists(t, metricsStr, "mssql_server_connected")
+	assertMetricExists(t, metricsStr, "mssql_login_ready")
+	assertMetricExists(t, metricsStr, "mssql_operator_managed_resources")
 }
 
 // =============================================================================

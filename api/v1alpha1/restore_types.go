@@ -14,6 +14,17 @@ const (
 	RestorePhaseFailed    RestorePhase = "Failed"
 )
 
+// FileMapping defines a logical-to-physical file move for RESTORE WITH MOVE.
+type FileMapping struct {
+	// LogicalName is the logical name of the database file in the backup.
+	// +kubebuilder:validation:MinLength=1
+	LogicalName string `json:"logicalName"`
+
+	// PhysicalPath is the target physical path on the SQL Server filesystem.
+	// +kubebuilder:validation:MinLength=1
+	PhysicalPath string `json:"physicalPath"`
+}
+
 // RestoreSpec defines the desired state of a SQL Server restore.
 type RestoreSpec struct {
 	// Server defines the SQL Server connection details.
@@ -26,6 +37,17 @@ type RestoreSpec struct {
 	// Source is the backup file path on the SQL Server filesystem.
 	// +kubebuilder:validation:MinLength=1
 	Source string `json:"source"`
+
+	// StopAt specifies a point-in-time for the restore (ISO 8601 format: "2024-01-15T14:30:00").
+	// Requires a Full backup + subsequent Log backups. The restore recovers the database
+	// to the state as of this timestamp.
+	// +optional
+	StopAt *string `json:"stopAt,omitempty"`
+
+	// WithMove specifies file relocations for the restore (RESTORE ... WITH MOVE).
+	// Use this when restoring to a different server with different file paths.
+	// +optional
+	WithMove []FileMapping `json:"withMove,omitempty"`
 }
 
 // RestoreStatus defines the observed state of a SQL Server restore.

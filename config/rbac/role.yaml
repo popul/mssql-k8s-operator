@@ -30,7 +30,9 @@ rules:
   - logins
   - permissions
   - restores
+  - scheduledbackups
   - schemas
+  - sqlservers
   verbs:
   - create
   - delete
@@ -50,7 +52,9 @@ rules:
   - logins/finalizers
   - permissions/finalizers
   - restores/finalizers
+  - scheduledbackups/finalizers
   - schemas/finalizers
+  - sqlservers/finalizers
   verbs:
   - update
 - apiGroups:
@@ -64,7 +68,9 @@ rules:
   - logins/status
   - permissions/status
   - restores/status
+  - scheduledbackups/status
   - schemas/status
+  - sqlservers/status
   verbs:
   - get
   - patch

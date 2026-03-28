@@ -221,6 +221,8 @@ func (r *ScheduledBackupReconciler) onBackupCompleted(ctx context.Context, sb *v
 	}
 
 	opmetrics.ReconcileTotal.WithLabelValues("ScheduledBackup", "success").Inc()
+	opmetrics.BackupLastSuccess.WithLabelValues(sb.Name, sb.Namespace, sb.Spec.DatabaseName).SetToCurrentTime()
+	opmetrics.BackupTotal.WithLabelValues(sb.Name, sb.Namespace, "success").Set(float64(sb.Status.SuccessfulBackups))
 	// Requeue to wait for next schedule
 	return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
 }
@@ -257,6 +259,7 @@ func (r *ScheduledBackupReconciler) onBackupFailed(ctx context.Context, sb *v1al
 	r.Recorder.Eventf(sb, "Warning", "BackupFailed",
 		"Scheduled backup %s failed", bak.Name)
 	opmetrics.ReconcileErrors.WithLabelValues("ScheduledBackup", "BackupFailed").Inc()
+	opmetrics.BackupTotal.WithLabelValues(sb.Name, sb.Namespace, "failure").Set(float64(sb.Status.FailedBackups))
 
 	// Continue on next schedule
 	return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
