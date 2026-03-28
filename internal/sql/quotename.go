@@ -11,3 +11,11 @@ func QuoteName(name string) string {
 	escaped := strings.ReplaceAll(name, "]", "]]")
 	return "[" + escaped + "]"
 }
+
+// QuoteString escapes a SQL Server string literal by doubling single quotes.
+// Used for values in DDL statements where parameterized queries are not supported
+// (e.g., CREATE LOGIN ... WITH PASSWORD = N'...').
+func QuoteString(value string) string {
+	escaped := strings.ReplaceAll(value, "'", "''")
+	return "N'" + escaped + "'"
+}

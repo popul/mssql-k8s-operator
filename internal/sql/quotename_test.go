@@ -31,6 +31,29 @@ func TestQuoteName(t *testing.T) {
 	}
 }
 
+func TestQuoteString(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		expected string
+	}{
+		{"simple password", "P@ssw0rd", "N'P@ssw0rd'"},
+		{"password with single quote", "it's", "N'it''s'"},
+		{"password with multiple quotes", "a'b'c", "N'a''b''c'"},
+		{"empty string", "", "N''"},
+		{"sql injection attempt", "'; DROP DATABASE master; --", "N'''; DROP DATABASE master; --'"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := QuoteString(tt.input)
+			if result != tt.expected {
+				t.Errorf("QuoteString(%q) = %q, want %q", tt.input, result, tt.expected)
+			}
+		})
+	}
+}
+
 func TestQuoteNameIdempotenceIsNotExpected(t *testing.T) {
 	// QuoteName is NOT idempotent by design - calling it twice wraps twice.
 	// This documents the behavior.

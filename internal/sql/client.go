@@ -127,8 +127,8 @@ func (c *MSSQLClient) LoginExists(ctx context.Context, name string) (bool, error
 }
 
 func (c *MSSQLClient) CreateLogin(ctx context.Context, name, password string) error {
-	query := fmt.Sprintf("CREATE LOGIN %s WITH PASSWORD = @p1", QuoteName(name))
-	_, err := c.db.ExecContext(ctx, query, password)
+	query := fmt.Sprintf("CREATE LOGIN %s WITH PASSWORD = %s", QuoteName(name), QuoteString(password))
+	_, err := c.db.ExecContext(ctx, query)
 	if err != nil {
 		return fmt.Errorf("failed to create login %s: %w", name, err)
 	}
@@ -145,8 +145,8 @@ func (c *MSSQLClient) DropLogin(ctx context.Context, name string) error {
 }
 
 func (c *MSSQLClient) UpdateLoginPassword(ctx context.Context, name, password string) error {
-	query := fmt.Sprintf("ALTER LOGIN %s WITH PASSWORD = @p1", QuoteName(name))
-	_, err := c.db.ExecContext(ctx, query, password)
+	query := fmt.Sprintf("ALTER LOGIN %s WITH PASSWORD = %s", QuoteName(name), QuoteString(password))
+	_, err := c.db.ExecContext(ctx, query)
 	if err != nil {
 		return fmt.Errorf("failed to update password for login %s: %w", name, err)
 	}
@@ -270,8 +270,16 @@ func (c *MSSQLClient) RemoveUserFromDatabaseRole(ctx context.Context, dbName, us
 func (c *MSSQLClient) UserOwnsObjects(ctx context.Context, dbName, userName string) (bool, error) {
 	var count int
 	err := c.queryInDatabase(ctx, dbName, func(conn *sql.Conn) error {
+		// Check both object ownership (sys.objects) and schema ownership (sys.schemas).
+		// DROP USER will fail if the user owns any schema or object.
 		return conn.QueryRowContext(ctx,
-			`SELECT COUNT(*) FROM sys.objects WHERE principal_id = DATABASE_PRINCIPAL_ID(@p1)`,
+			`SELECT (
+				SELECT COUNT(*) FROM sys.objects WHERE principal_id = DATABASE_PRINCIPAL_ID(@p1)
+			) + (
+				SELECT COUNT(*) FROM sys.schemas
+				WHERE principal_id = DATABASE_PRINCIPAL_ID(@p1)
+				AND name NOT IN ('dbo', 'guest', 'INFORMATION_SCHEMA', 'sys')
+			)`,
 			userName).Scan(&count)
 	})
 	return count > 0, err
