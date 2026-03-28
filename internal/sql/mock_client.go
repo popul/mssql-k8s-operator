@@ -38,15 +38,19 @@ type MockClient struct {
 	users        map[string]*MockUser // key: "dbName/userName"
 	calls        map[string]int
 	ConnectError error
+	// MethodErrors allows injecting errors for specific methods.
+	// Key is the method name (e.g. "CreateDatabase"), value is the error to return.
+	MethodErrors map[string]error
 }
 
 // NewMockClient creates a new MockClient.
 func NewMockClient() *MockClient {
 	return &MockClient{
-		databases: make(map[string]*MockDatabase),
-		logins:    make(map[string]*MockLogin),
-		users:     make(map[string]*MockUser),
-		calls:     make(map[string]int),
+		databases:    make(map[string]*MockDatabase),
+		logins:       make(map[string]*MockLogin),
+		users:        make(map[string]*MockUser),
+		calls:        make(map[string]int),
+		MethodErrors: make(map[string]error),
 	}
 }
 
@@ -94,6 +98,25 @@ func (m *MockClient) checkConnect() error {
 	return nil
 }
 
+// checkMethodError returns injected error for a method, if any.
+func (m *MockClient) checkMethodError(method string) error {
+	if err, ok := m.MethodErrors[method]; ok {
+		return err
+	}
+	return nil
+}
+
+// SetMethodError injects an error for a specific method. Pass nil to clear.
+func (m *MockClient) SetMethodError(method string, err error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if err == nil {
+		delete(m.MethodErrors, method)
+	} else {
+		m.MethodErrors[method] = err
+	}
+}
+
 func userKey(dbName, userName string) string {
 	return dbName + "/" + userName
 }
@@ -118,6 +141,9 @@ func (m *MockClient) CreateDatabase(_ context.Context, name string, collation *s
 	if err := m.checkConnect(); err != nil {
 		return err
 	}
+	if err := m.checkMethodError("CreateDatabase"); err != nil {
+		return err
+	}
 	col := ""
 	if collation != nil {
 		col = *collation
@@ -131,6 +157,9 @@ func (m *MockClient) DropDatabase(_ context.Context, name string) error {
 	defer m.mu.Unlock()
 	m.track("DropDatabase")
 	if err := m.checkConnect(); err != nil {
+		return err
+	}
+	if err := m.checkMethodError("DropDatabase"); err != nil {
 		return err
 	}
 	delete(m.databases, name)
@@ -156,6 +185,9 @@ func (m *MockClient) SetDatabaseOwner(_ context.Context, dbName, owner string) e
 	defer m.mu.Unlock()
 	m.track("SetDatabaseOwner")
 	if err := m.checkConnect(); err != nil {
+		return err
+	}
+	if err := m.checkMethodError("SetDatabaseOwner"); err != nil {
 		return err
 	}
 	db, ok := m.databases[dbName]
@@ -209,6 +241,9 @@ func (m *MockClient) CreateLogin(_ context.Context, name, password string) error
 	if err := m.checkConnect(); err != nil {
 		return err
 	}
+	if err := m.checkMethodError("CreateLogin"); err != nil {
+		return err
+	}
 	m.logins[name] = &MockLogin{Name: name, Password: password}
 	return nil
 }
@@ -220,6 +255,9 @@ func (m *MockClient) DropLogin(_ context.Context, name string) error {
 	if err := m.checkConnect(); err != nil {
 		return err
 	}
+	if err := m.checkMethodError("DropLogin"); err != nil {
+		return err
+	}
 	delete(m.logins, name)
 	return nil
 }
@@ -229,6 +267,9 @@ func (m *MockClient) UpdateLoginPassword(_ context.Context, name, password strin
 	defer m.mu.Unlock()
 	m.track("UpdateLoginPassword")
 	if err := m.checkConnect(); err != nil {
+		return err
+	}
+	if err := m.checkMethodError("UpdateLoginPassword"); err != nil {
 		return err
 	}
 	login, ok := m.logins[name]
@@ -345,6 +386,9 @@ func (m *MockClient) CreateUser(_ context.Context, dbName, userName, loginName s
 	if err := m.checkConnect(); err != nil {
 		return err
 	}
+	if err := m.checkMethodError("CreateUser"); err != nil {
+		return err
+	}
 	m.users[userKey(dbName, userName)] = &MockUser{
 		DBName:    dbName,
 		UserName:  userName,
@@ -358,6 +402,9 @@ func (m *MockClient) DropUser(_ context.Context, dbName, userName string) error 
 	defer m.mu.Unlock()
 	m.track("DropUser")
 	if err := m.checkConnect(); err != nil {
+		return err
+	}
+	if err := m.checkMethodError("DropUser"); err != nil {
 		return err
 	}
 	delete(m.users, userKey(dbName, userName))
@@ -385,6 +432,9 @@ func (m *MockClient) AddUserToDatabaseRole(_ context.Context, dbName, userName, 
 	defer m.mu.Unlock()
 	m.track("AddUserToDatabaseRole")
 	if err := m.checkConnect(); err != nil {
+		return err
+	}
+	if err := m.checkMethodError("AddUserToDatabaseRole"); err != nil {
 		return err
 	}
 	u, ok := m.users[userKey(dbName, userName)]
