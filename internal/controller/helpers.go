@@ -9,6 +9,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	sqlclient "github.com/popul/mssql-k8s-operator/internal/sql"
 
@@ -65,6 +66,64 @@ func toSet(items []string) map[string]bool {
 		s[item] = true
 	}
 	return s
+}
+
+// mapSecretToDatabases returns reconcile requests for all Database CRs that reference the given Secret.
+func mapSecretToDatabases(ctx context.Context, c client.Client) func(context.Context, client.Object) []reconcile.Request {
+	return func(ctx context.Context, obj client.Object) []reconcile.Request {
+		var list v1alpha1.DatabaseList
+		if err := c.List(ctx, &list, client.InNamespace(obj.GetNamespace())); err != nil {
+			return nil
+		}
+		var requests []reconcile.Request
+		for _, db := range list.Items {
+			if db.Spec.Server.CredentialsSecret.Name == obj.GetName() {
+				requests = append(requests, reconcile.Request{
+					NamespacedName: types.NamespacedName{Name: db.Name, Namespace: db.Namespace},
+				})
+			}
+		}
+		return requests
+	}
+}
+
+// mapSecretToLogins returns reconcile requests for all Login CRs that reference the given Secret.
+func mapSecretToLogins(ctx context.Context, c client.Client) func(context.Context, client.Object) []reconcile.Request {
+	return func(ctx context.Context, obj client.Object) []reconcile.Request {
+		var list v1alpha1.LoginList
+		if err := c.List(ctx, &list, client.InNamespace(obj.GetNamespace())); err != nil {
+			return nil
+		}
+		var requests []reconcile.Request
+		for _, login := range list.Items {
+			if login.Spec.Server.CredentialsSecret.Name == obj.GetName() ||
+				login.Spec.PasswordSecret.Name == obj.GetName() {
+				requests = append(requests, reconcile.Request{
+					NamespacedName: types.NamespacedName{Name: login.Name, Namespace: login.Namespace},
+				})
+			}
+		}
+		return requests
+	}
+}
+
+// mapSecretToDatabaseUsers returns reconcile requests for all DatabaseUser CRs that reference the given Secret.
+func mapSecretToDatabaseUsers(ctx context.Context, c client.Client) func(context.Context, client.Object) []reconcile.Request {
+	return func(ctx context.Context, obj client.Object) []reconcile.Request {
+		var list v1alpha1.DatabaseUserList
+		if err := c.List(ctx, &list, client.InNamespace(obj.GetNamespace())); err != nil {
+			return nil
+		}
+		var requests []reconcile.Request
+		for _, user := range list.Items {
+			if user.Spec.Server.CredentialsSecret.Name == obj.GetName() {
+				requests = append(requests, reconcile.Request{
+					NamespacedName: types.NamespacedName{Name: user.Name, Namespace: user.Namespace},
+				})
+			}
+		}
+		return requests
+	}
 }
 
 // requeueWithJitter returns a RequeueAfter duration with ±20% jitter to avoid thundering herd.

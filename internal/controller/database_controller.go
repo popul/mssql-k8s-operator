@@ -13,9 +13,11 @@ import (
 	"k8s.io/client-go/tools/record"
 	"k8s.io/client-go/util/workqueue"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
@@ -222,8 +224,8 @@ func (r *DatabaseReconciler) setConditionAndReturn(ctx context.Context, db *v1al
 
 func (r *DatabaseReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
-		For(&v1alpha1.Database{}).
-		WithEventFilter(predicate.GenerationChangedPredicate{}).
+		For(&v1alpha1.Database{}, builder.WithPredicates(predicate.GenerationChangedPredicate{})).
+		Watches(&corev1.Secret{}, handler.EnqueueRequestsFromMapFunc(mapSecretToDatabases(context.Background(), mgr.GetClient()))).
 		WithOptions(controller.Options{
 			MaxConcurrentReconciles: 5,
 			RateLimiter: workqueue.NewTypedMaxOfRateLimiter(

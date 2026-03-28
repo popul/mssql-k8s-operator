@@ -41,6 +41,23 @@ jobs:
       - name: Build
         run: go build -o bin/manager ./cmd/main.go
 
+  manifests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Install controller-gen
+        run: go install sigs.k8s.io/controller-tools/cmd/controller-gen@v0.17.2
+
+      - name: Generate and check for drift
+        run: |
+          make generate manifests
+          git diff --exit-code || (echo "ERROR: CRDs or generated code is out of date. Run 'make generate manifests' and commit." && exit 1)
+
   lint:
     runs-on: ubuntu-latest
     steps:

@@ -3,14 +3,18 @@ apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
   annotations:
-    controller-gen.kubebuilder.io/version: v0.16.5
+    controller-gen.kubebuilder.io/version: v0.17.2
   name: logins.mssql.popul.io
 spec:
   group: mssql.popul.io
   names:
+    categories:
+    - mssql
     kind: Login
     listKind: LoginList
     plural: logins
+    shortNames:
+    - mslogin
     singular: login
   scope: Namespaced
   versions:
@@ -70,6 +74,7 @@ spec:
                 properties:
                   name:
                     description: Name of the Secret.
+                    minLength: 1
                     type: string
                 required:
                 - name
@@ -83,12 +88,14 @@ spec:
                     properties:
                       name:
                         description: Name of the Secret.
+                        minLength: 1
                         type: string
                     required:
                     - name
                     type: object
                   host:
                     description: Host is the hostname or IP of the SQL Server instance.
+                    minLength: 1
                     type: string
                   port:
                     default: 1433
