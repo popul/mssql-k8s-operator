@@ -2490,6 +2490,239 @@ func TestE2EScheduledBackup(t *testing.T) {
 }
 
 // =============================================================================
+// Point-in-Time Restore E2E Tests
+// =============================================================================
+
+func TestE2EPointInTimeRestore(t *testing.T) {
+	dbName := "pitrestoretest"
+	dbKey := types.NamespacedName{Name: "pit-restore-db", Namespace: testNamespace}
+	fullBackupKey := types.NamespacedName{Name: "pit-full-backup", Namespace: testNamespace}
+	logBackupKey := types.NamespacedName{Name: "pit-log-backup", Namespace: testNamespace}
+	restoreKey := types.NamespacedName{Name: "pit-restore", Namespace: testNamespace}
+
+	// 1. Create a database with FULL recovery model (required for log backups)
+	db := &mssqlv1.Database{
+		ObjectMeta: metav1.ObjectMeta{Name: dbKey.Name, Namespace: dbKey.Namespace},
+		Spec: mssqlv1.DatabaseSpec{
+			Server:         serverRef(),
+			DatabaseName:   dbName,
+			DeletionPolicy: ptr(mssqlv1.DeletionPolicyDelete),
+			RecoveryModel:  ptr(mssqlv1.RecoveryModelFull),
+		},
+	}
+	if err := k8sClient.Create(ctx, db); err != nil && !errors.IsAlreadyExists(err) {
+		t.Fatalf("Failed to create Database CR: %v", err)
+	}
+	waitForReady(t, dbKey, &mssqlv1.Database{})
+
+	// 2. Create a test table and insert "before" data
+	execRawSQL(t, dbName, "CREATE TABLE dbo.TestData (id INT PRIMARY KEY, value NVARCHAR(50), inserted_at DATETIME2 DEFAULT GETDATE())")
+	execRawSQL(t, dbName, "INSERT INTO dbo.TestData (id, value) VALUES (1, 'before-pit')")
+
+	// 3. Take a full backup (required base for log chain)
+	fullBackup := &mssqlv1.Backup{
+		ObjectMeta: metav1.ObjectMeta{Name: fullBackupKey.Name, Namespace: fullBackupKey.Namespace},
+		Spec: mssqlv1.BackupSpec{
+			Server:      serverRef(),
+			DatabaseName: dbName,
+			Destination: fmt.Sprintf("/var/opt/mssql/backup/%s-full.bak", dbName),
+			Type:        mssqlv1.BackupTypeFull,
+			Compression: ptr(true),
+		},
+	}
+	if err := k8sClient.Create(ctx, fullBackup); err != nil {
+		t.Fatalf("Failed to create full Backup CR: %v", err)
+	}
+	waitForBackupPhase(t, fullBackupKey, mssqlv1.BackupPhaseCompleted, pollTimeout)
+
+	// 4. Insert more data and record the PIT timestamp
+	execRawSQL(t, dbName, "INSERT INTO dbo.TestData (id, value) VALUES (2, 'at-pit')")
+
+	// Record the point-in-time (we want to restore to HERE)
+	pitTimestamp := queryScalarSQL(t, dbName, "SELECT FORMAT(GETDATE(), 'yyyy-MM-ddTHH:mm:ss')")
+	t.Logf("PIT timestamp: %s", pitTimestamp)
+
+	// Small delay to ensure clock advances
+	time.Sleep(2 * time.Second)
+
+	// 5. Insert "after" data that should NOT be present after PIT restore
+	execRawSQL(t, dbName, "INSERT INTO dbo.TestData (id, value) VALUES (3, 'after-pit')")
+
+	// 6. Take a log backup (captures the log chain including all inserts)
+	logBackup := &mssqlv1.Backup{
+		ObjectMeta: metav1.ObjectMeta{Name: logBackupKey.Name, Namespace: logBackupKey.Namespace},
+		Spec: mssqlv1.BackupSpec{
+			Server:      serverRef(),
+			DatabaseName: dbName,
+			Destination: fmt.Sprintf("/var/opt/mssql/backup/%s-log.trn", dbName),
+			Type:        mssqlv1.BackupTypeLog,
+			Compression: ptr(true),
+		},
+	}
+	if err := k8sClient.Create(ctx, logBackup); err != nil {
+		t.Fatalf("Failed to create log Backup CR: %v", err)
+	}
+	waitForBackupPhase(t, logBackupKey, mssqlv1.BackupPhaseCompleted, pollTimeout)
+
+	// 7. Drop the database via raw SQL (operator DB CR still exists but we need DB gone for restore)
+	_ = k8sClient.Delete(ctx, db)
+	waitForDeletion(t, dbKey, &mssqlv1.Database{}, pollTimeout)
+	err := wait.PollUntilContextTimeout(ctx, pollInterval, pollTimeout, true, func(ctx context.Context) (bool, error) {
+		exists, err := sqlClient.DatabaseExists(ctx, dbName)
+		if err != nil {
+			return false, nil
+		}
+		return !exists, nil
+	})
+	if err != nil {
+		t.Fatalf("Timed out waiting for database to be dropped: %v", err)
+	}
+
+	// 8. Restore with STOPAT to the PIT timestamp
+	restore := &mssqlv1.Restore{
+		ObjectMeta: metav1.ObjectMeta{Name: restoreKey.Name, Namespace: restoreKey.Namespace},
+		Spec: mssqlv1.RestoreSpec{
+			Server:       serverRef(),
+			DatabaseName: dbName,
+			Source:       fmt.Sprintf("/var/opt/mssql/backup/%s-full.bak", dbName),
+			StopAt:       ptr(pitTimestamp),
+		},
+	}
+	if err := k8sClient.Create(ctx, restore); err != nil {
+		t.Fatalf("Failed to create PIT Restore CR: %v", err)
+	}
+
+	rst := waitForRestorePhase(t, restoreKey, mssqlv1.RestorePhaseCompleted, pollTimeout)
+
+	// 9. Verify the restore was successful
+	if rst.Status.CompletionTime == nil {
+		t.Error("Expected CompletionTime to be set")
+	}
+	cond := findCondition(rst, mssqlv1.ConditionReady)
+	if cond == nil || cond.Status != metav1.ConditionTrue {
+		t.Error("Expected Ready=True on completed PIT restore")
+	}
+
+	// 10. Verify data: rows 1 and 2 should exist, row 3 should NOT
+	count := queryScalarSQL(t, dbName, "SELECT COUNT(*) FROM dbo.TestData WHERE id IN (1, 2)")
+	if count != "2" {
+		t.Errorf("Expected 2 rows (before + at PIT), got %s", count)
+	}
+
+	afterCount := queryScalarSQL(t, dbName, "SELECT COUNT(*) FROM dbo.TestData WHERE id = 3")
+	if afterCount != "0" {
+		t.Errorf("Expected 0 rows for after-PIT data, got %s (PIT restore did not exclude post-PIT data)", afterCount)
+	}
+
+	t.Logf("PIT restore verified: 2 rows present (before+at PIT), 0 rows after PIT")
+
+	// Cleanup
+	_ = k8sClient.Delete(ctx, &mssqlv1.Restore{ObjectMeta: metav1.ObjectMeta{Name: restoreKey.Name, Namespace: restoreKey.Namespace}})
+	_ = k8sClient.Delete(ctx, &mssqlv1.Backup{ObjectMeta: metav1.ObjectMeta{Name: fullBackupKey.Name, Namespace: fullBackupKey.Namespace}})
+	_ = k8sClient.Delete(ctx, &mssqlv1.Backup{ObjectMeta: metav1.ObjectMeta{Name: logBackupKey.Name, Namespace: logBackupKey.Namespace}})
+	execRawSQL(t, "master", fmt.Sprintf("IF DB_ID('%s') IS NOT NULL DROP DATABASE [%s]", dbName, dbName))
+}
+
+// =============================================================================
+// WITH MOVE Restore E2E Tests
+// =============================================================================
+
+func TestE2ERestoreWithMove(t *testing.T) {
+	dbName := "moverestoretest"
+	targetDbName := "moverestoretarget"
+	dbKey := types.NamespacedName{Name: "move-restore-db", Namespace: testNamespace}
+	backupKey := types.NamespacedName{Name: "move-backup", Namespace: testNamespace}
+	restoreKey := types.NamespacedName{Name: "move-restore", Namespace: testNamespace}
+
+	// 1. Create and backup a source database
+	db := &mssqlv1.Database{
+		ObjectMeta: metav1.ObjectMeta{Name: dbKey.Name, Namespace: dbKey.Namespace},
+		Spec: mssqlv1.DatabaseSpec{
+			Server:         serverRef(),
+			DatabaseName:   dbName,
+			DeletionPolicy: ptr(mssqlv1.DeletionPolicyDelete),
+		},
+	}
+	if err := k8sClient.Create(ctx, db); err != nil && !errors.IsAlreadyExists(err) {
+		t.Fatalf("Failed to create Database CR: %v", err)
+	}
+	waitForReady(t, dbKey, &mssqlv1.Database{})
+
+	execRawSQL(t, dbName, "CREATE TABLE dbo.MoveTest (id INT PRIMARY KEY, value NVARCHAR(50))")
+	execRawSQL(t, dbName, "INSERT INTO dbo.MoveTest (id, value) VALUES (1, 'moved')")
+
+	backup := &mssqlv1.Backup{
+		ObjectMeta: metav1.ObjectMeta{Name: backupKey.Name, Namespace: backupKey.Namespace},
+		Spec: mssqlv1.BackupSpec{
+			Server:      serverRef(),
+			DatabaseName: dbName,
+			Destination: fmt.Sprintf("/var/opt/mssql/backup/%s.bak", dbName),
+			Type:        mssqlv1.BackupTypeFull,
+		},
+	}
+	if err := k8sClient.Create(ctx, backup); err != nil {
+		t.Fatalf("Failed to create Backup CR: %v", err)
+	}
+	waitForBackupPhase(t, backupKey, mssqlv1.BackupPhaseCompleted, pollTimeout)
+
+	// 2. Get the logical file names from the backup
+	dataLogical := queryScalarSQL(t, "master",
+		fmt.Sprintf("RESTORE FILELISTONLY FROM DISK = '/var/opt/mssql/backup/%s.bak'", dbName))
+	t.Logf("First logical file from backup: %s", dataLogical)
+
+	// 3. Restore to a different database name with MOVE
+	restore := &mssqlv1.Restore{
+		ObjectMeta: metav1.ObjectMeta{Name: restoreKey.Name, Namespace: restoreKey.Namespace},
+		Spec: mssqlv1.RestoreSpec{
+			Server:       serverRef(),
+			DatabaseName: targetDbName,
+			Source:       fmt.Sprintf("/var/opt/mssql/backup/%s.bak", dbName),
+			WithMove: []mssqlv1.FileMapping{
+				{
+					LogicalName:  dbName,
+					PhysicalPath: fmt.Sprintf("/var/opt/mssql/data/%s.mdf", targetDbName),
+				},
+				{
+					LogicalName:  dbName + "_log",
+					PhysicalPath: fmt.Sprintf("/var/opt/mssql/data/%s_log.ldf", targetDbName),
+				},
+			},
+		},
+	}
+	if err := k8sClient.Create(ctx, restore); err != nil {
+		t.Fatalf("Failed to create Restore with MOVE CR: %v", err)
+	}
+
+	rst := waitForRestorePhase(t, restoreKey, mssqlv1.RestorePhaseCompleted, pollTimeout)
+
+	// 4. Verify the target database exists and has data
+	cond := findCondition(rst, mssqlv1.ConditionReady)
+	if cond == nil || cond.Status != metav1.ConditionTrue {
+		t.Error("Expected Ready=True on completed WITH MOVE restore")
+	}
+
+	exists, err := sqlClient.DatabaseExists(ctx, targetDbName)
+	if err != nil {
+		t.Fatalf("Failed to check target DB existence: %v", err)
+	}
+	if !exists {
+		t.Fatal("Target database should exist after WITH MOVE restore")
+	}
+
+	val := queryScalarSQL(t, targetDbName, "SELECT value FROM dbo.MoveTest WHERE id = 1")
+	if val != "moved" {
+		t.Errorf("Expected value 'moved', got '%s'", val)
+	}
+
+	// Cleanup
+	_ = k8sClient.Delete(ctx, &mssqlv1.Restore{ObjectMeta: metav1.ObjectMeta{Name: restoreKey.Name, Namespace: restoreKey.Namespace}})
+	_ = k8sClient.Delete(ctx, &mssqlv1.Backup{ObjectMeta: metav1.ObjectMeta{Name: backupKey.Name, Namespace: backupKey.Namespace}})
+	_ = k8sClient.Delete(ctx, db)
+	execRawSQL(t, "master", fmt.Sprintf("IF DB_ID('%s') IS NOT NULL DROP DATABASE [%s]", dbName, dbName))
+	execRawSQL(t, "master", fmt.Sprintf("IF DB_ID('%s') IS NOT NULL DROP DATABASE [%s]", targetDbName, targetDbName))
+}
+
+// =============================================================================
 // Business Metrics E2E Test
 // =============================================================================
 
@@ -2669,6 +2902,23 @@ func TestE2EAvailabilityGroup(t *testing.T) {
 // --- Additional helpers ---
 
 // execRawSQL executes a raw SQL statement against a specific database.
+// queryScalarSQL runs a query that returns a single scalar value.
+func queryScalarSQL(t *testing.T, database, query string) string {
+	t.Helper()
+	connStr := fmt.Sprintf("sqlserver://sa:%s@localhost:1433?database=%s&encrypt=disable",
+		saPassword, database)
+	db, err := sql.Open("sqlserver", connStr)
+	if err != nil {
+		t.Fatalf("Failed to open raw SQL connection: %v", err)
+	}
+	defer db.Close()
+	var result string
+	if err := db.QueryRowContext(ctx, query).Scan(&result); err != nil {
+		t.Fatalf("Failed to query scalar SQL %q: %v", query, err)
+	}
+	return result
+}
+
 func execRawSQL(t *testing.T, database, query string) {
 	t.Helper()
 	connStr := fmt.Sprintf("sqlserver://sa:%s@localhost:1433?database=%s&encrypt=disable",
