@@ -2,6 +2,7 @@ package controller
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"testing"
 
@@ -13,6 +14,9 @@ import (
 	v1alpha1 "github.com/popul/mssql-k8s-operator/api/v1alpha1"
 	sqlclient "github.com/popul/mssql-k8s-operator/internal/sql"
 )
+
+// errTest is a shared test error used across all controller tests.
+var errTest = errors.New("test error")
 
 func TestGetCredentialsFromSecret_Valid(t *testing.T) {
 	scheme := runtime.NewScheme()

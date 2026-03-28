@@ -569,6 +569,9 @@ func (m *MockClient) GetSchemaOwner(_ context.Context, dbName, schemaName string
 	if err := m.checkConnect(); err != nil {
 		return "", err
 	}
+	if err := m.checkMethodError("GetSchemaOwner"); err != nil {
+		return "", err
+	}
 	s, ok := m.schemas[schemaKey(dbName, schemaName)]
 	if !ok {
 		return "", fmt.Errorf("schema %q not found in database %q", schemaName, dbName)
