@@ -91,6 +91,26 @@ func main() {
 		os.Exit(1)
 	}
 
+	if err := (&controller.SchemaReconciler{
+		Client:           mgr.GetClient(),
+		Scheme:           mgr.GetScheme(),
+		Recorder:         mgr.GetEventRecorderFor("schema-controller"),
+		SQLClientFactory: sqlFactory,
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "Schema")
+		os.Exit(1)
+	}
+
+	if err := (&controller.PermissionReconciler{
+		Client:           mgr.GetClient(),
+		Scheme:           mgr.GetScheme(),
+		Recorder:         mgr.GetEventRecorderFor("permission-controller"),
+		SQLClientFactory: sqlFactory,
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "Permission")
+		os.Exit(1)
+	}
+
 	if enableWebhooks {
 		setupLog.Info("registering webhooks")
 		// Webhooks are registered via the types' Default/Validate methods.

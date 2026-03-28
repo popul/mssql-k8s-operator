@@ -88,5 +88,37 @@ func (c *interfaceChecker) LoginHasUsers(ctx context.Context, loginName string) 
 	return false, nil
 }
 
-func (c *interfaceChecker) Close() error                    { return nil }
-func (c *interfaceChecker) Ping(ctx context.Context) error  { return nil }
+func (c *interfaceChecker) SchemaExists(ctx context.Context, dbName, schemaName string) (bool, error) {
+	return false, nil
+}
+func (c *interfaceChecker) CreateSchema(ctx context.Context, dbName, schemaName string, owner *string) error {
+	return nil
+}
+func (c *interfaceChecker) DropSchema(ctx context.Context, dbName, schemaName string) error {
+	return nil
+}
+func (c *interfaceChecker) GetSchemaOwner(ctx context.Context, dbName, schemaName string) (string, error) {
+	return "", nil
+}
+func (c *interfaceChecker) SetSchemaOwner(ctx context.Context, dbName, schemaName, owner string) error {
+	return nil
+}
+func (c *interfaceChecker) SchemaHasObjects(ctx context.Context, dbName, schemaName string) (bool, error) {
+	return false, nil
+}
+
+func (c *interfaceChecker) GetPermissions(ctx context.Context, dbName, userName string) ([]PermissionState, error) {
+	return nil, nil
+}
+func (c *interfaceChecker) GrantPermission(ctx context.Context, dbName, permission, target, userName string) error {
+	return nil
+}
+func (c *interfaceChecker) DenyPermission(ctx context.Context, dbName, permission, target, userName string) error {
+	return nil
+}
+func (c *interfaceChecker) RevokePermission(ctx context.Context, dbName, permission, target, userName string) error {
+	return nil
+}
+
+func (c *interfaceChecker) Close() error                   { return nil }
+func (c *interfaceChecker) Ping(ctx context.Context) error { return nil }

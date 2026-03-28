@@ -30,12 +30,29 @@ type MockUser struct {
 	OwnsObjects bool
 }
 
+// MockSchema represents a schema in the mock.
+type MockSchema struct {
+	DBName     string
+	SchemaName string
+	Owner      string
+	HasObjects bool
+}
+
+// MockPermission represents a permission in the mock.
+type MockPermission struct {
+	Permission string
+	Target     string
+	State      string // "GRANT" or "DENY"
+}
+
 // MockClient is an in-memory implementation of SQLClient for testing.
 type MockClient struct {
 	mu           sync.RWMutex
 	databases    map[string]*MockDatabase
 	logins       map[string]*MockLogin
-	users        map[string]*MockUser // key: "dbName/userName"
+	users        map[string]*MockUser       // key: "dbName/userName"
+	schemas      map[string]*MockSchema     // key: "dbName/schemaName"
+	permissions  map[string][]MockPermission // key: "dbName/userName"
 	calls        map[string]int
 	ConnectError error
 	// MethodErrors allows injecting errors for specific methods.
@@ -49,6 +66,8 @@ func NewMockClient() *MockClient {
 		databases:    make(map[string]*MockDatabase),
 		logins:       make(map[string]*MockLogin),
 		users:        make(map[string]*MockUser),
+		schemas:      make(map[string]*MockSchema),
+		permissions:  make(map[string][]MockPermission),
 		calls:        make(map[string]int),
 		MethodErrors: make(map[string]error),
 	}
@@ -490,6 +509,198 @@ func (m *MockClient) GetMockUser(dbName, userName string) *MockUser {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	return m.users[userKey(dbName, userName)]
+}
+
+// --- Schema operations ---
+
+func schemaKey(dbName, schemaName string) string {
+	return dbName + "/" + schemaName
+}
+
+func (m *MockClient) SchemaExists(_ context.Context, dbName, schemaName string) (bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.track("SchemaExists")
+	if err := m.checkConnect(); err != nil {
+		return false, err
+	}
+	_, ok := m.schemas[schemaKey(dbName, schemaName)]
+	return ok, nil
+}
+
+func (m *MockClient) CreateSchema(_ context.Context, dbName, schemaName string, owner *string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.track("CreateSchema")
+	if err := m.checkConnect(); err != nil {
+		return err
+	}
+	if err := m.checkMethodError("CreateSchema"); err != nil {
+		return err
+	}
+	o := "dbo"
+	if owner != nil && *owner != "" {
+		o = *owner
+	}
+	m.schemas[schemaKey(dbName, schemaName)] = &MockSchema{
+		DBName: dbName, SchemaName: schemaName, Owner: o,
+	}
+	return nil
+}
+
+func (m *MockClient) DropSchema(_ context.Context, dbName, schemaName string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.track("DropSchema")
+	if err := m.checkConnect(); err != nil {
+		return err
+	}
+	if err := m.checkMethodError("DropSchema"); err != nil {
+		return err
+	}
+	delete(m.schemas, schemaKey(dbName, schemaName))
+	return nil
+}
+
+func (m *MockClient) GetSchemaOwner(_ context.Context, dbName, schemaName string) (string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.track("GetSchemaOwner")
+	if err := m.checkConnect(); err != nil {
+		return "", err
+	}
+	s, ok := m.schemas[schemaKey(dbName, schemaName)]
+	if !ok {
+		return "", fmt.Errorf("schema %q not found in database %q", schemaName, dbName)
+	}
+	return s.Owner, nil
+}
+
+func (m *MockClient) SetSchemaOwner(_ context.Context, dbName, schemaName, owner string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.track("SetSchemaOwner")
+	if err := m.checkConnect(); err != nil {
+		return err
+	}
+	if err := m.checkMethodError("SetSchemaOwner"); err != nil {
+		return err
+	}
+	s, ok := m.schemas[schemaKey(dbName, schemaName)]
+	if !ok {
+		return fmt.Errorf("schema %q not found in database %q", schemaName, dbName)
+	}
+	s.Owner = owner
+	return nil
+}
+
+func (m *MockClient) SchemaHasObjects(_ context.Context, dbName, schemaName string) (bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.track("SchemaHasObjects")
+	if err := m.checkConnect(); err != nil {
+		return false, err
+	}
+	s, ok := m.schemas[schemaKey(dbName, schemaName)]
+	if !ok {
+		return false, nil
+	}
+	return s.HasObjects, nil
+}
+
+// SetSchemaHasObjects configures whether a schema has objects (for testing deletion blocking).
+func (m *MockClient) SetSchemaHasObjects(dbName, schemaName string, has bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	key := schemaKey(dbName, schemaName)
+	if s, ok := m.schemas[key]; ok {
+		s.HasObjects = has
+	}
+}
+
+// --- Permission operations ---
+
+func permKey(dbName, userName string) string {
+	return dbName + "/" + userName
+}
+
+func (m *MockClient) GetPermissions(_ context.Context, dbName, userName string) ([]PermissionState, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.track("GetPermissions")
+	if err := m.checkConnect(); err != nil {
+		return nil, err
+	}
+	perms := m.permissions[permKey(dbName, userName)]
+	result := make([]PermissionState, len(perms))
+	for i, p := range perms {
+		result[i] = PermissionState{Permission: p.Permission, Target: p.Target, State: p.State}
+	}
+	return result, nil
+}
+
+func (m *MockClient) GrantPermission(_ context.Context, dbName, permission, target, userName string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.track("GrantPermission")
+	if err := m.checkConnect(); err != nil {
+		return err
+	}
+	if err := m.checkMethodError("GrantPermission"); err != nil {
+		return err
+	}
+	key := permKey(dbName, userName)
+	// Remove any existing entry for this permission+target
+	m.removePermLocked(key, permission, target)
+	m.permissions[key] = append(m.permissions[key], MockPermission{
+		Permission: permission, Target: target, State: "GRANT",
+	})
+	return nil
+}
+
+func (m *MockClient) DenyPermission(_ context.Context, dbName, permission, target, userName string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.track("DenyPermission")
+	if err := m.checkConnect(); err != nil {
+		return err
+	}
+	if err := m.checkMethodError("DenyPermission"); err != nil {
+		return err
+	}
+	key := permKey(dbName, userName)
+	m.removePermLocked(key, permission, target)
+	m.permissions[key] = append(m.permissions[key], MockPermission{
+		Permission: permission, Target: target, State: "DENY",
+	})
+	return nil
+}
+
+func (m *MockClient) RevokePermission(_ context.Context, dbName, permission, target, userName string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.track("RevokePermission")
+	if err := m.checkConnect(); err != nil {
+		return err
+	}
+	if err := m.checkMethodError("RevokePermission"); err != nil {
+		return err
+	}
+	key := permKey(dbName, userName)
+	m.removePermLocked(key, permission, target)
+	return nil
+}
+
+// removePermLocked removes a permission entry (must be called with mu held).
+func (m *MockClient) removePermLocked(key, permission, target string) {
+	perms := m.permissions[key]
+	filtered := perms[:0]
+	for _, p := range perms {
+		if !(p.Permission == permission && p.Target == target) {
+			filtered = append(filtered, p)
+		}
+	}
+	m.permissions[key] = filtered
 }
 
 // --- Cross-reference checks ---

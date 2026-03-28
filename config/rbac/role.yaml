@@ -25,6 +25,8 @@ rules:
   - databases
   - databaseusers
   - logins
+  - permissions
+  - schemas
   verbs:
   - create
   - delete
@@ -39,6 +41,8 @@ rules:
   - databases/finalizers
   - databaseusers/finalizers
   - logins/finalizers
+  - permissions/finalizers
+  - schemas/finalizers
   verbs:
   - update
 - apiGroups:
@@ -47,6 +51,8 @@ rules:
   - databases/status
   - databaseusers/status
   - logins/status
+  - permissions/status
+  - schemas/status
   verbs:
   - get
   - patch

@@ -126,6 +126,44 @@ func mapSecretToDatabaseUsers(ctx context.Context, c client.Client) func(context
 	}
 }
 
+// mapSecretToSchemas returns reconcile requests for all Schema CRs that reference the given Secret.
+func mapSecretToSchemas(ctx context.Context, c client.Client) func(context.Context, client.Object) []reconcile.Request {
+	return func(ctx context.Context, obj client.Object) []reconcile.Request {
+		var list v1alpha1.SchemaList
+		if err := c.List(ctx, &list, client.InNamespace(obj.GetNamespace())); err != nil {
+			return nil
+		}
+		var requests []reconcile.Request
+		for _, s := range list.Items {
+			if s.Spec.Server.CredentialsSecret.Name == obj.GetName() {
+				requests = append(requests, reconcile.Request{
+					NamespacedName: types.NamespacedName{Name: s.Name, Namespace: s.Namespace},
+				})
+			}
+		}
+		return requests
+	}
+}
+
+// mapSecretToPermissions returns reconcile requests for all Permission CRs that reference the given Secret.
+func mapSecretToPermissions(ctx context.Context, c client.Client) func(context.Context, client.Object) []reconcile.Request {
+	return func(ctx context.Context, obj client.Object) []reconcile.Request {
+		var list v1alpha1.PermissionList
+		if err := c.List(ctx, &list, client.InNamespace(obj.GetNamespace())); err != nil {
+			return nil
+		}
+		var requests []reconcile.Request
+		for _, p := range list.Items {
+			if p.Spec.Server.CredentialsSecret.Name == obj.GetName() {
+				requests = append(requests, reconcile.Request{
+					NamespacedName: types.NamespacedName{Name: p.Name, Namespace: p.Namespace},
+				})
+			}
+		}
+		return requests
+	}
+}
+
 // requeueWithJitter returns a RequeueAfter duration with ±20% jitter to avoid thundering herd.
 func requeueWithJitter(base time.Duration) time.Duration {
 	jitter := time.Duration(rand.Int63n(int64(base*2/5))) - base/5

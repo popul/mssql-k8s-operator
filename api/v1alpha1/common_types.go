@@ -62,6 +62,7 @@ const (
 	ReasonUserOwnsObjects           = "UserOwnsObjects"
 	ReasonInvalidServerRole         = "InvalidServerRole"
 	ReasonDatabaseProvisioning      = "DatabaseProvisioning"
+	ReasonSchemaNotEmpty            = "SchemaNotEmpty"
 )
 
 // Finalizer name used by all CRDs in this operator.

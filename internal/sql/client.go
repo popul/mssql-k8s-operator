@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"net/url"
+	"strings"
 
 	_ "github.com/microsoft/go-mssqldb"
 )
@@ -324,6 +325,135 @@ func (c *MSSQLClient) LoginHasUsers(ctx context.Context, loginName string) (bool
 		}
 	}
 	return false, nil
+}
+
+// --- Schema operations ---
+
+func (c *MSSQLClient) SchemaExists(ctx context.Context, dbName, schemaName string) (bool, error) {
+	var exists bool
+	err := c.queryInDatabase(ctx, dbName, func(conn *sql.Conn) error {
+		return conn.QueryRowContext(ctx,
+			"SELECT CASE WHEN SCHEMA_ID(@p1) IS NOT NULL THEN 1 ELSE 0 END", schemaName).Scan(&exists)
+	})
+	return exists, err
+}
+
+func (c *MSSQLClient) CreateSchema(ctx context.Context, dbName, schemaName string, owner *string) error {
+	query := fmt.Sprintf("CREATE SCHEMA %s", QuoteName(schemaName))
+	if owner != nil && *owner != "" {
+		query += fmt.Sprintf(" AUTHORIZATION %s", QuoteName(*owner))
+	}
+	return c.execInDatabase(ctx, dbName, query)
+}
+
+func (c *MSSQLClient) DropSchema(ctx context.Context, dbName, schemaName string) error {
+	query := fmt.Sprintf("DROP SCHEMA %s", QuoteName(schemaName))
+	return c.execInDatabase(ctx, dbName, query)
+}
+
+func (c *MSSQLClient) GetSchemaOwner(ctx context.Context, dbName, schemaName string) (string, error) {
+	var owner string
+	err := c.queryInDatabase(ctx, dbName, func(conn *sql.Conn) error {
+		return conn.QueryRowContext(ctx,
+			`SELECT dp.name FROM sys.schemas s
+			 JOIN sys.database_principals dp ON s.principal_id = dp.principal_id
+			 WHERE s.name = @p1`, schemaName).Scan(&owner)
+	})
+	if err != nil {
+		return "", fmt.Errorf("failed to get owner for schema %s: %w", schemaName, err)
+	}
+	return owner, nil
+}
+
+func (c *MSSQLClient) SetSchemaOwner(ctx context.Context, dbName, schemaName, owner string) error {
+	query := fmt.Sprintf("ALTER AUTHORIZATION ON SCHEMA::%s TO %s", QuoteName(schemaName), QuoteName(owner))
+	return c.execInDatabase(ctx, dbName, query)
+}
+
+func (c *MSSQLClient) SchemaHasObjects(ctx context.Context, dbName, schemaName string) (bool, error) {
+	var count int
+	err := c.queryInDatabase(ctx, dbName, func(conn *sql.Conn) error {
+		return conn.QueryRowContext(ctx,
+			"SELECT COUNT(*) FROM sys.objects WHERE schema_id = SCHEMA_ID(@p1)", schemaName).Scan(&count)
+	})
+	if err != nil {
+		return false, fmt.Errorf("failed to check objects in schema %s: %w", schemaName, err)
+	}
+	return count > 0, nil
+}
+
+// --- Permission operations ---
+
+func (c *MSSQLClient) GetPermissions(ctx context.Context, dbName, userName string) ([]PermissionState, error) {
+	var perms []PermissionState
+	err := c.queryInDatabase(ctx, dbName, func(conn *sql.Conn) error {
+		rows, err := conn.QueryContext(ctx,
+			`SELECT dp.permission_name, dp.class_desc,
+			        ISNULL(SCHEMA_NAME(dp.major_id), OBJECT_NAME(dp.major_id)),
+			        dp.state_desc
+			 FROM sys.database_permissions dp
+			 JOIN sys.database_principals pr ON dp.grantee_principal_id = pr.principal_id
+			 WHERE pr.name = @p1 AND dp.state_desc IN ('GRANT', 'DENY')`, userName)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+
+		for rows.Next() {
+			var perm, classDesc, targetName, state string
+			if err := rows.Scan(&perm, &classDesc, &targetName, &state); err != nil {
+				return err
+			}
+			target := formatTarget(classDesc, targetName)
+			perms = append(perms, PermissionState{
+				Permission: perm,
+				Target:     target,
+				State:      state,
+			})
+		}
+		return rows.Err()
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to get permissions for user %s: %w", userName, err)
+	}
+	return perms, nil
+}
+
+func formatTarget(classDesc, targetName string) string {
+	switch classDesc {
+	case "SCHEMA":
+		return "SCHEMA::" + targetName
+	case "OBJECT_OR_COLUMN":
+		return "OBJECT::" + targetName
+	case "DATABASE":
+		return "DATABASE"
+	default:
+		return classDesc + "::" + targetName
+	}
+}
+
+func (c *MSSQLClient) GrantPermission(ctx context.Context, dbName, permission, target, userName string) error {
+	if !IsValidPermission(permission) {
+		return fmt.Errorf("invalid permission: %s", permission)
+	}
+	query := fmt.Sprintf("GRANT %s ON %s TO %s", strings.ToUpper(permission), QuotePermissionTarget(target), QuoteName(userName))
+	return c.execInDatabase(ctx, dbName, query)
+}
+
+func (c *MSSQLClient) DenyPermission(ctx context.Context, dbName, permission, target, userName string) error {
+	if !IsValidPermission(permission) {
+		return fmt.Errorf("invalid permission: %s", permission)
+	}
+	query := fmt.Sprintf("DENY %s ON %s TO %s", strings.ToUpper(permission), QuotePermissionTarget(target), QuoteName(userName))
+	return c.execInDatabase(ctx, dbName, query)
+}
+
+func (c *MSSQLClient) RevokePermission(ctx context.Context, dbName, permission, target, userName string) error {
+	if !IsValidPermission(permission) {
+		return fmt.Errorf("invalid permission: %s", permission)
+	}
+	query := fmt.Sprintf("REVOKE %s ON %s FROM %s", strings.ToUpper(permission), QuotePermissionTarget(target), QuoteName(userName))
+	return c.execInDatabase(ctx, dbName, query)
 }
 
 // --- Helpers ---
