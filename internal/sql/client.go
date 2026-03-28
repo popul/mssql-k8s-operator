@@ -475,6 +475,42 @@ func (c *MSSQLClient) queryInDatabase(ctx context.Context, dbName string, fn fun
 	return fn(conn)
 }
 
+// --- Backup/Restore operations ---
+
+func (c *MSSQLClient) BackupDatabase(ctx context.Context, dbName, destination string, backupType string, compression bool) error {
+	query := fmt.Sprintf("BACKUP DATABASE %s TO DISK = %s", QuoteName(dbName), QuoteString(destination))
+
+	var withClauses []string
+	switch backupType {
+	case "Differential":
+		withClauses = append(withClauses, "DIFFERENTIAL")
+	case "Log":
+		// Log backup uses BACKUP LOG, not BACKUP DATABASE
+		query = fmt.Sprintf("BACKUP LOG %s TO DISK = %s", QuoteName(dbName), QuoteString(destination))
+	}
+	if compression {
+		withClauses = append(withClauses, "COMPRESSION")
+	}
+	if len(withClauses) > 0 {
+		query += " WITH " + strings.Join(withClauses, ", ")
+	}
+
+	_, err := c.db.ExecContext(ctx, query)
+	if err != nil {
+		return fmt.Errorf("failed to backup database %s: %w", dbName, err)
+	}
+	return nil
+}
+
+func (c *MSSQLClient) RestoreDatabase(ctx context.Context, dbName, source string) error {
+	query := fmt.Sprintf("RESTORE DATABASE %s FROM DISK = %s WITH REPLACE", QuoteName(dbName), QuoteString(source))
+	_, err := c.db.ExecContext(ctx, query)
+	if err != nil {
+		return fmt.Errorf("failed to restore database %s: %w", dbName, err)
+	}
+	return nil
+}
+
 // execInDatabase executes a statement in the context of a specific database.
 func (c *MSSQLClient) execInDatabase(ctx context.Context, dbName, query string) error {
 	conn, err := c.db.Conn(ctx)

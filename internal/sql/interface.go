@@ -50,6 +50,10 @@ type SQLClient interface {
 	// Cross-reference checks
 	LoginHasUsers(ctx context.Context, loginName string) (bool, error)
 
+	// Backup/Restore operations
+	BackupDatabase(ctx context.Context, dbName, destination string, backupType string, compression bool) error
+	RestoreDatabase(ctx context.Context, dbName, source string) error
+
 	// Connection
 	Close() error
 	Ping(ctx context.Context) error

@@ -120,5 +120,12 @@ func (c *interfaceChecker) RevokePermission(ctx context.Context, dbName, permiss
 	return nil
 }
 
+func (c *interfaceChecker) BackupDatabase(ctx context.Context, dbName, destination string, backupType string, compression bool) error {
+	return nil
+}
+func (c *interfaceChecker) RestoreDatabase(ctx context.Context, dbName, source string) error {
+	return nil
+}
+
 func (c *interfaceChecker) Close() error                   { return nil }
 func (c *interfaceChecker) Ping(ctx context.Context) error { return nil }

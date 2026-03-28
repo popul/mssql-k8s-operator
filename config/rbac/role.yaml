@@ -22,10 +22,12 @@ rules:
 - apiGroups:
   - mssql.popul.io
   resources:
+  - backups
   - databases
   - databaseusers
   - logins
   - permissions
+  - restores
   - schemas
   verbs:
   - create
@@ -38,20 +40,24 @@ rules:
 - apiGroups:
   - mssql.popul.io
   resources:
+  - backups/finalizers
   - databases/finalizers
   - databaseusers/finalizers
   - logins/finalizers
   - permissions/finalizers
+  - restores/finalizers
   - schemas/finalizers
   verbs:
   - update
 - apiGroups:
   - mssql.popul.io
   resources:
+  - backups/status
   - databases/status
   - databaseusers/status
   - logins/status
   - permissions/status
+  - restores/status
   - schemas/status
   verbs:
   - get

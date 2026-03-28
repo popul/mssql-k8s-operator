@@ -723,6 +723,34 @@ func (m *MockClient) LoginHasUsers(_ context.Context, loginName string) (bool, e
 	return false, nil
 }
 
+// --- Backup/Restore operations ---
+
+func (m *MockClient) BackupDatabase(_ context.Context, dbName, destination string, backupType string, compression bool) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.track("BackupDatabase")
+	if err := m.checkConnect(); err != nil {
+		return err
+	}
+	if err := m.checkMethodError("BackupDatabase"); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (m *MockClient) RestoreDatabase(_ context.Context, dbName, source string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.track("RestoreDatabase")
+	if err := m.checkConnect(); err != nil {
+		return err
+	}
+	if err := m.checkMethodError("RestoreDatabase"); err != nil {
+		return err
+	}
+	return nil
+}
+
 // --- Connection ---
 
 func (m *MockClient) Close() error {

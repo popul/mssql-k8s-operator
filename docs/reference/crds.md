@@ -203,3 +203,78 @@ NAME              DATABASE   USER        READY   AGE
 ### Deletion behavior
 
 All grants and denies are REVOKEd on CR deletion. There is no `deletionPolicy`.
+
+---
+
+## Backup
+
+Short name: `msbak` | Category: `mssql`
+
+One-shot database backup. Executes once, then remains in `Completed` or `Failed` phase.
+
+### Spec
+
+| Field | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `server` | `ServerReference` | yes | | SQL Server connection (see Common types) |
+| `databaseName` | `string` | yes | | Database to back up |
+| `destination` | `string` | yes | | File path on the SQL Server filesystem (e.g. `/var/opt/mssql/backups/mydb.bak`) |
+| `type` | `BackupType` | no | `Full` | `Full`, `Differential`, or `Log` |
+| `compression` | `*bool` | no | `false` | Enable backup compression |
+
+### Status
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `phase` | `BackupPhase` | `Pending`, `Running`, `Completed`, `Failed` |
+| `conditions` | `[]metav1.Condition` | See [status conditions](status-conditions.md) |
+| `observedGeneration` | `int64` | Last reconciled `metadata.generation` |
+| `startTime` | `*metav1.Time` | When the backup started |
+| `completionTime` | `*metav1.Time` | When the backup completed |
+| `backupSize` | `*int64` | Backup file size in bytes (if reported by SQL Server) |
+
+### Print columns
+
+```
+NAME              DATABASE   TYPE   PHASE       AGE
+```
+
+### Immutability
+
+Spec is fully immutable after creation. To re-run a backup, delete the CR and create a new one.
+
+---
+
+## Restore
+
+Short name: `msrestore` | Category: `mssql`
+
+One-shot database restore. Executes once, then remains in `Completed` or `Failed` phase.
+
+### Spec
+
+| Field | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `server` | `ServerReference` | yes | | SQL Server connection (see Common types) |
+| `databaseName` | `string` | yes | | Target database name for the restore |
+| `source` | `string` | yes | | Backup file path on the SQL Server filesystem |
+
+### Status
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `phase` | `RestorePhase` | `Pending`, `Running`, `Completed`, `Failed` |
+| `conditions` | `[]metav1.Condition` | See [status conditions](status-conditions.md) |
+| `observedGeneration` | `int64` | Last reconciled `metadata.generation` |
+| `startTime` | `*metav1.Time` | When the restore started |
+| `completionTime` | `*metav1.Time` | When the restore completed |
+
+### Print columns
+
+```
+NAME              DATABASE   PHASE       AGE
+```
+
+### Immutability
+
+Spec is fully immutable after creation. To re-run a restore, delete the CR and create a new one.

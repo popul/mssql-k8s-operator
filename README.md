@@ -1,6 +1,6 @@
 # MSSQL Kubernetes Operator
 
-A Kubernetes operator for managing SQL Server objects (databases, logins, users, schemas, permissions) declaratively via Custom Resources.
+A Kubernetes operator for managing SQL Server objects (databases, logins, users, schemas, permissions) and operations (backup, restore) declaratively via Custom Resources.
 
 ## What it does
 
@@ -18,6 +18,8 @@ A Kubernetes operator for managing SQL Server objects (databases, logins, users,
 | `DatabaseUser` | `msuser` | Database users mapped to logins |
 | `Schema` | `msschema` | Schemas inside a database |
 | `Permission` | `msperm` | Fine-grained GRANT / DENY / REVOKE |
+| `Backup` | `msbak` | One-shot database backup (Full/Differential/Log) |
+| `Restore` | `msrestore` | One-shot database restore from backup file |
 
 ## Quick start
 
@@ -59,6 +61,7 @@ kubectl get msdb
 | [Manage databases](docs/how-to/manage-databases.md) | Create, update, delete databases |
 | [Manage logins & users](docs/how-to/manage-logins-users.md) | Create logins, users, rotate passwords |
 | [Manage schemas & permissions](docs/how-to/manage-schemas-permissions.md) | Create schemas, grant/deny permissions |
+| [Backup & restore](docs/how-to/backup-restore.md) | Backup and restore databases |
 | [Troubleshoot](docs/how-to/troubleshoot.md) | Diagnose and fix common issues |
 | **Reference** | |
 | [CRD reference](docs/reference/crds.md) | All CRD fields, types, and defaults |
