@@ -38,6 +38,9 @@ spec:
             - --metrics-bind-address=:{{ .Values.metrics.port }}
             {{- if .Values.leaderElection.enabled }}
             - --leader-elect
+            - --leader-elect-lease-duration={{ .Values.leaderElection.leaseDuration }}
+            - --leader-elect-renew-deadline={{ .Values.leaderElection.renewDeadline }}
+            - --leader-elect-retry-period={{ .Values.leaderElection.retryPeriod }}
             {{- end }}
           ports:
             - name: metrics
@@ -66,9 +69,31 @@ spec:
       nodeSelector:
         {{- toYaml . | nindent 8 }}
       {{- end }}
-      {{- with .Values.affinity }}
+      {{- if .Values.affinity }}
       affinity:
-        {{- toYaml . | nindent 8 }}
+        {{- toYaml .Values.affinity | nindent 8 }}
+      {{- else if gt (int .Values.replicaCount) 1 }}
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchLabels:
+                    {{- include "mssql-operator.selectorLabels" . | nindent 20 }}
+                topologyKey: kubernetes.io/hostname
+      {{- end }}
+      {{- if .Values.topologySpreadConstraints }}
+      topologySpreadConstraints:
+        {{- toYaml .Values.topologySpreadConstraints | nindent 8 }}
+      {{- else if gt (int .Values.replicaCount) 1 }}
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: topology.kubernetes.io/zone
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              {{- include "mssql-operator.selectorLabels" . | nindent 14 }}
       {{- end }}
       {{- with .Values.tolerations }}
       tolerations:

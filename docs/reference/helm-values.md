@@ -8,6 +8,9 @@ All values for the `mssql-operator` Helm chart.
 |-------|------|---------|-------------|
 | `replicaCount` | int | `1` | Number of operator replicas. Use 2+ for HA. |
 | `leaderElection.enabled` | bool | `true` | Enable leader election. Required when `replicaCount > 1`. |
+| `leaderElection.leaseDuration` | string | `15s` | Duration before standby forces leadership acquisition |
+| `leaderElection.renewDeadline` | string | `10s` | Duration leader retries renewing before stepping down |
+| `leaderElection.retryPeriod` | string | `2s` | Interval between leader election retries |
 
 ## Image
 
@@ -48,7 +51,8 @@ All values for the `mssql-operator` Helm chart.
 |-------|------|---------|-------------|
 | `nodeSelector` | map | `{}` | Node selector |
 | `tolerations` | list | `[]` | Tolerations |
-| `affinity` | map | `{}` | Affinity rules |
+| `affinity` | map | `{}` | Custom affinity rules. When empty and `replicaCount > 1`, pod anti-affinity is auto-configured. |
+| `topologySpreadConstraints` | list | `[]` | Custom topology spread. When empty and `replicaCount > 1`, zone spread is auto-configured. |
 
 ## Pod Security
 

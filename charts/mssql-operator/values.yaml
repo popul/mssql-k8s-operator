@@ -16,6 +16,9 @@ serviceAccount:
 
 leaderElection:
   enabled: true
+  leaseDuration: 15s
+  renewDeadline: 10s
+  retryPeriod: 2s
 
 resources:
   limits:
@@ -28,6 +31,10 @@ resources:
 nodeSelector: {}
 tolerations: []
 affinity: {}
+
+# topologySpreadConstraints distributes pods across failure domains.
+# Automatically configured when replicaCount > 1 and no custom affinity is set.
+topologySpreadConstraints: []
 
 podAnnotations: {}
 podSecurityContext:

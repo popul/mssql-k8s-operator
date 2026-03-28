@@ -58,9 +58,26 @@
       "type": "object",
       "properties": {
         "enabled": {
-          "type": "boolean"
+          "type": "boolean",
+          "description": "Enable leader election for HA deployments"
+        },
+        "leaseDuration": {
+          "type": "string",
+          "description": "Duration that non-leader candidates wait before forcing leadership acquisition (e.g. 15s)"
+        },
+        "renewDeadline": {
+          "type": "string",
+          "description": "Duration that the leader retries refreshing before giving up (e.g. 10s)"
+        },
+        "retryPeriod": {
+          "type": "string",
+          "description": "Duration between leader election retries (e.g. 2s)"
         }
       }
+    },
+    "topologySpreadConstraints": {
+      "type": "array",
+      "description": "Custom topology spread constraints. Auto-configured for zone spread when replicaCount > 1."
     },
     "resources": {
       "type": "object",
