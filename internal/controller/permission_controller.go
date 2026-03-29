@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"golang.org/x/time/rate"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
@@ -22,7 +23,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
-	"golang.org/x/time/rate"
 
 	v1alpha1 "github.com/popul/mssql-k8s-operator/api/v1alpha1"
 	opmetrics "github.com/popul/mssql-k8s-operator/internal/metrics"
@@ -121,8 +121,9 @@ func (r *PermissionReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 			continue // already granted
 		}
 		sqlCtx2, cancel2 := sqlContext(ctx)
-		defer cancel2()
-		if err := sqlClient.GrantPermission(sqlCtx2, perm.Spec.DatabaseName, g.Permission, g.On, perm.Spec.UserName); err != nil {
+		err := sqlClient.GrantPermission(sqlCtx2, perm.Spec.DatabaseName, g.Permission, g.On, perm.Spec.UserName)
+		cancel2()
+		if err != nil {
 			return ctrl.Result{}, fmt.Errorf("failed to grant %s on %s: %w", g.Permission, g.On, err)
 		}
 		r.Recorder.Event(&perm, corev1.EventTypeNormal, "PermissionGranted",
@@ -136,8 +137,9 @@ func (r *PermissionReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 			continue // already denied
 		}
 		sqlCtx3, cancel3 := sqlContext(ctx)
-		defer cancel3()
-		if err := sqlClient.DenyPermission(sqlCtx3, perm.Spec.DatabaseName, d.Permission, d.On, perm.Spec.UserName); err != nil {
+		err := sqlClient.DenyPermission(sqlCtx3, perm.Spec.DatabaseName, d.Permission, d.On, perm.Spec.UserName)
+		cancel3()
+		if err != nil {
 			return ctrl.Result{}, fmt.Errorf("failed to deny %s on %s: %w", d.Permission, d.On, err)
 		}
 		r.Recorder.Event(&perm, corev1.EventTypeNormal, "PermissionDenied",
@@ -149,8 +151,9 @@ func (r *PermissionReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		if cur.State == "GRANT" {
 			if _, desired := desiredGrants[key]; !desired {
 				sqlCtx4, cancel4 := sqlContext(ctx)
-				defer cancel4()
-				if err := sqlClient.RevokePermission(sqlCtx4, perm.Spec.DatabaseName, cur.Permission, cur.Target, perm.Spec.UserName); err != nil {
+				err := sqlClient.RevokePermission(sqlCtx4, perm.Spec.DatabaseName, cur.Permission, cur.Target, perm.Spec.UserName)
+				cancel4()
+				if err != nil {
 					return ctrl.Result{}, fmt.Errorf("failed to revoke %s on %s: %w", cur.Permission, cur.Target, err)
 				}
 				r.Recorder.Event(&perm, corev1.EventTypeNormal, "PermissionRevoked",
@@ -160,8 +163,9 @@ func (r *PermissionReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		if cur.State == "DENY" {
 			if _, desired := desiredDenies[key]; !desired {
 				sqlCtx5, cancel5 := sqlContext(ctx)
-				defer cancel5()
-				if err := sqlClient.RevokePermission(sqlCtx5, perm.Spec.DatabaseName, cur.Permission, cur.Target, perm.Spec.UserName); err != nil {
+				err := sqlClient.RevokePermission(sqlCtx5, perm.Spec.DatabaseName, cur.Permission, cur.Target, perm.Spec.UserName)
+				cancel5()
+				if err != nil {
 					return ctrl.Result{}, fmt.Errorf("failed to revoke deny %s on %s: %w", cur.Permission, cur.Target, err)
 				}
 				r.Recorder.Event(&perm, corev1.EventTypeNormal, "PermissionRevoked",
@@ -201,16 +205,18 @@ func (r *PermissionReconciler) handleDeletion(ctx context.Context, perm *v1alpha
 			// Revoke all grants
 			for _, g := range perm.Spec.Grants {
 				sqlCtx, cancel := sqlContext(ctx)
-				defer cancel()
-				if err := sqlClient.RevokePermission(sqlCtx, perm.Spec.DatabaseName, g.Permission, g.On, perm.Spec.UserName); err != nil {
+				err := sqlClient.RevokePermission(sqlCtx, perm.Spec.DatabaseName, g.Permission, g.On, perm.Spec.UserName)
+				cancel()
+				if err != nil {
 					logger.Error(err, "failed to revoke grant", "permission", g.Permission, "on", g.On)
 				}
 			}
 			// Revoke all denies
 			for _, d := range perm.Spec.Denies {
 				sqlCtx, cancel := sqlContext(ctx)
-				defer cancel()
-				if err := sqlClient.RevokePermission(sqlCtx, perm.Spec.DatabaseName, d.Permission, d.On, perm.Spec.UserName); err != nil {
+				err := sqlClient.RevokePermission(sqlCtx, perm.Spec.DatabaseName, d.Permission, d.On, perm.Spec.UserName)
+				cancel()
+				if err != nil {
 					logger.Error(err, "failed to revoke deny", "permission", d.Permission, "on", d.On)
 				}
 			}
@@ -254,7 +260,7 @@ func (r *PermissionReconciler) setConditionAndReturn(ctx context.Context, perm *
 func (r *PermissionReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&v1alpha1.Permission{}, builder.WithPredicates(predicate.GenerationChangedPredicate{})).
-		Watches(&corev1.Secret{}, handler.EnqueueRequestsFromMapFunc(mapSecretToPermissions(context.Background(), mgr.GetClient()))).
+		Watches(&corev1.Secret{}, handler.EnqueueRequestsFromMapFunc(mapSecretToPermissions(mgr.GetClient()))).
 		WithOptions(controller.Options{
 			MaxConcurrentReconciles: 5,
 			RateLimiter: workqueue.NewTypedMaxOfRateLimiter(

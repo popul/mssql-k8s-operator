@@ -95,7 +95,8 @@ func (r *AvailabilityGroup) validateAG() error {
 
 	// Validate each replica
 	serverNames := make(map[string]bool)
-	for i, replica := range r.Spec.Replicas {
+	for i := range r.Spec.Replicas {
+		replica := &r.Spec.Replicas[i]
 		replicaPath := specPath.Child("replicas").Index(i)
 
 		if replica.ServerName == "" {

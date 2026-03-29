@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/robfig/cron/v3"
+	"golang.org/x/time/rate"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -25,7 +26,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
-	"golang.org/x/time/rate"
 
 	v1alpha1 "github.com/popul/mssql-k8s-operator/api/v1alpha1"
 	opmetrics "github.com/popul/mssql-k8s-operator/internal/metrics"
@@ -288,9 +288,9 @@ func (r *ScheduledBackupReconciler) cleanupRetention(ctx context.Context, sb *v1
 
 	// Filter completed backups and sort by creation time
 	var completed []v1alpha1.Backup
-	for _, b := range backupList.Items {
-		if b.Status.Phase == v1alpha1.BackupPhaseCompleted {
-			completed = append(completed, b)
+	for i := range backupList.Items {
+		if backupList.Items[i].Status.Phase == v1alpha1.BackupPhaseCompleted {
+			completed = append(completed, backupList.Items[i])
 		}
 	}
 	sort.Slice(completed, func(i, j int) bool {
@@ -304,9 +304,9 @@ func (r *ScheduledBackupReconciler) cleanupRetention(ctx context.Context, sb *v1
 	if sb.Spec.Retention.MaxAge != nil {
 		maxAge, err := time.ParseDuration(*sb.Spec.Retention.MaxAge)
 		if err == nil {
-			for _, b := range completed {
-				if now.Sub(b.CreationTimestamp.Time) > maxAge {
-					toDelete = append(toDelete, b)
+			for i := range completed {
+				if now.Sub(completed[i].CreationTimestamp.Time) > maxAge {
+					toDelete = append(toDelete, completed[i])
 				}
 			}
 		}
@@ -317,16 +317,16 @@ func (r *ScheduledBackupReconciler) cleanupRetention(ctx context.Context, sb *v1
 		maxCount := int(*sb.Spec.Retention.MaxCount)
 		if len(completed) > maxCount {
 			excess := completed[:len(completed)-maxCount]
-			for _, b := range excess {
+			for i := range excess {
 				found := false
-				for _, d := range toDelete {
-					if d.Name == b.Name {
+				for j := range toDelete {
+					if toDelete[j].Name == excess[i].Name {
 						found = true
 						break
 					}
 				}
 				if !found {
-					toDelete = append(toDelete, b)
+					toDelete = append(toDelete, excess[i])
 				}
 			}
 		}
@@ -379,6 +379,7 @@ func mapBackupToScheduledBackup(ctx context.Context, c client.Client) func(conte
 	}
 }
 
+//nolint:unparam // returns (Result, error) for consistent controller pattern
 func (r *ScheduledBackupReconciler) setCondition(ctx context.Context, sb *v1alpha1.ScheduledBackup,
 	status metav1.ConditionStatus, reason, message string) (ctrl.Result, error) {
 

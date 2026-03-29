@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"time"
 
+	"golang.org/x/time/rate"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
@@ -22,7 +23,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
-	"golang.org/x/time/rate"
 
 	v1alpha1 "github.com/popul/mssql-k8s-operator/api/v1alpha1"
 	opmetrics "github.com/popul/mssql-k8s-operator/internal/metrics"
@@ -124,18 +124,16 @@ func (r *LoginReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 		r.Recorder.Event(&login, corev1.EventTypeNormal, "LoginCreated",
 			fmt.Sprintf("Login %s created", login.Spec.LoginName))
 		logger.Info("login created", "login", login.Spec.LoginName)
-	} else {
-		// Check password rotation
-		if pwSecret.ResourceVersion != login.Status.PasswordSecretResourceVersion {
-			sqlCtx3, cancel3 := sqlContext(ctx)
-			defer cancel3()
-			if err := sqlClient.UpdateLoginPassword(sqlCtx3, login.Spec.LoginName, string(loginPassword)); err != nil {
-				return ctrl.Result{}, fmt.Errorf("failed to update login password: %w", err)
-			}
-			r.Recorder.Event(&login, corev1.EventTypeNormal, "LoginPasswordRotated",
-				fmt.Sprintf("Login %s password rotated", login.Spec.LoginName))
-			logger.Info("login password rotated", "login", login.Spec.LoginName)
+	} else if pwSecret.ResourceVersion != login.Status.PasswordSecretResourceVersion {
+		// Password rotation
+		sqlCtx3, cancel3 := sqlContext(ctx)
+		defer cancel3()
+		if err := sqlClient.UpdateLoginPassword(sqlCtx3, login.Spec.LoginName, string(loginPassword)); err != nil {
+			return ctrl.Result{}, fmt.Errorf("failed to update login password: %w", err)
 		}
+		r.Recorder.Event(&login, corev1.EventTypeNormal, "LoginPasswordRotated",
+			fmt.Sprintf("Login %s password rotated", login.Spec.LoginName))
+		logger.Info("login password rotated", "login", login.Spec.LoginName)
 	}
 
 	// Default database
@@ -194,27 +192,31 @@ func (r *LoginReconciler) reconcileServerRoles(ctx context.Context, login *v1alp
 	desiredSet := toSet(desiredRoles)
 
 	for role := range desiredSet {
-		if !currentSet[role] {
-			sqlCtx2, cancel2 := sqlContext(ctx)
-			defer cancel2()
-			if err := sqlClient.AddLoginToServerRole(sqlCtx2, loginName, role); err != nil {
-				return fmt.Errorf("failed to add role %s: %w", role, err)
-			}
-			r.Recorder.Event(login, corev1.EventTypeNormal, "ServerRoleAdded",
-				fmt.Sprintf("Login %s added to server role %s", loginName, role))
+		if currentSet[role] {
+			continue
 		}
+		sqlCtx2, cancel2 := sqlContext(ctx)
+		err := sqlClient.AddLoginToServerRole(sqlCtx2, loginName, role)
+		cancel2()
+		if err != nil {
+			return fmt.Errorf("failed to add role %s: %w", role, err)
+		}
+		r.Recorder.Event(login, corev1.EventTypeNormal, "ServerRoleAdded",
+			fmt.Sprintf("Login %s added to server role %s", loginName, role))
 	}
 
 	for role := range currentSet {
-		if !desiredSet[role] {
-			sqlCtx3, cancel3 := sqlContext(ctx)
-			defer cancel3()
-			if err := sqlClient.RemoveLoginFromServerRole(sqlCtx3, loginName, role); err != nil {
-				return fmt.Errorf("failed to remove role %s: %w", role, err)
-			}
-			r.Recorder.Event(login, corev1.EventTypeNormal, "ServerRoleRemoved",
-				fmt.Sprintf("Login %s removed from server role %s", loginName, role))
+		if desiredSet[role] {
+			continue
 		}
+		sqlCtx3, cancel3 := sqlContext(ctx)
+		err := sqlClient.RemoveLoginFromServerRole(sqlCtx3, loginName, role)
+		cancel3()
+		if err != nil {
+			return fmt.Errorf("failed to remove role %s: %w", role, err)
+		}
+		r.Recorder.Event(login, corev1.EventTypeNormal, "ServerRoleRemoved",
+			fmt.Sprintf("Login %s removed from server role %s", loginName, role))
 	}
 
 	return nil
@@ -283,6 +285,7 @@ func (r *LoginReconciler) handleDeletion(ctx context.Context, login *v1alpha1.Lo
 	return ctrl.Result{}, nil
 }
 
+//nolint:unparam // status kept for API consistency
 func (r *LoginReconciler) setConditionAndReturn(ctx context.Context, login *v1alpha1.Login,
 	status metav1.ConditionStatus, reason, message string) (ctrl.Result, error) {
 
@@ -310,7 +313,7 @@ func (r *LoginReconciler) setConditionAndReturn(ctx context.Context, login *v1al
 func (r *LoginReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&v1alpha1.Login{}, builder.WithPredicates(predicate.GenerationChangedPredicate{})).
-		Watches(&corev1.Secret{}, handler.EnqueueRequestsFromMapFunc(mapSecretToLogins(context.Background(), mgr.GetClient()))).
+		Watches(&corev1.Secret{}, handler.EnqueueRequestsFromMapFunc(mapSecretToLogins(mgr.GetClient()))).
 		WithOptions(controller.Options{
 			MaxConcurrentReconciles: 5,
 			RateLimiter: workqueue.NewTypedMaxOfRateLimiter(

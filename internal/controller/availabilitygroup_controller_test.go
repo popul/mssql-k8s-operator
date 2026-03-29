@@ -155,7 +155,7 @@ func TestAGReconcile_Creation(t *testing.T) {
 func TestAGReconcile_AlreadyExists(t *testing.T) {
 	mockSQL := sqlclient.NewMockClient()
 	// Pre-create the AG in mock
-	mockSQL.CreateAG(context.Background(), sqlclient.AGConfig{
+	mockSQL.CreateAG(context.Background(), &sqlclient.AGConfig{
 		Name:                      "myag",
 		Replicas:                  []sqlclient.AGReplicaConfig{{ServerName: "sql-0"}, {ServerName: "sql-1"}},
 		Databases:                 []string{"mydb"},
@@ -274,7 +274,7 @@ func TestAGReconcile_RequeueWithJitter(t *testing.T) {
 func TestAGReconcile_Deletion(t *testing.T) {
 	mockSQL := sqlclient.NewMockClient()
 	// Pre-create AG
-	mockSQL.CreateAG(context.Background(), sqlclient.AGConfig{
+	mockSQL.CreateAG(context.Background(), &sqlclient.AGConfig{
 		Name:     "myag",
 		Replicas: []sqlclient.AGReplicaConfig{{ServerName: "sql-0"}, {ServerName: "sql-1"}},
 	})

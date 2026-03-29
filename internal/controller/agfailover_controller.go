@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"time"
 
+	"golang.org/x/time/rate"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
@@ -19,7 +20,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
-	"golang.org/x/time/rate"
 
 	v1alpha1 "github.com/popul/mssql-k8s-operator/api/v1alpha1"
 	opmetrics "github.com/popul/mssql-k8s-operator/internal/metrics"
@@ -163,6 +163,7 @@ func (r *AGFailoverReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	return r.setFailoverCompleted(ctx, &fo, previousPrimary, fo.Spec.TargetReplica, eventMsg)
 }
 
+//nolint:unparam // condStatus kept for API consistency
 func (r *AGFailoverReconciler) setFailoverStatus(ctx context.Context, fo *v1alpha1.AGFailover,
 	phase v1alpha1.FailoverPhase, condStatus metav1.ConditionStatus, reason, message string) (ctrl.Result, error) {
 
@@ -184,6 +185,7 @@ func (r *AGFailoverReconciler) setFailoverStatus(ctx context.Context, fo *v1alph
 	return ctrl.Result{}, nil
 }
 
+//nolint:unparam // returns (Result, error) for consistent controller pattern
 func (r *AGFailoverReconciler) setFailoverCompleted(ctx context.Context, fo *v1alpha1.AGFailover,
 	previousPrimary, newPrimary, message string) (ctrl.Result, error) {
 

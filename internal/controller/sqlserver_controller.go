@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"time"
 
+	"golang.org/x/time/rate"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
@@ -21,7 +22,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
-	"golang.org/x/time/rate"
 
 	v1alpha1 "github.com/popul/mssql-k8s-operator/api/v1alpha1"
 	opmetrics "github.com/popul/mssql-k8s-operator/internal/metrics"
@@ -135,6 +135,7 @@ func (r *SQLServerReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 	return ctrl.Result{RequeueAfter: requeueWithJitter(60 * time.Second)}, nil
 }
 
+//nolint:unparam // status kept for API consistency
 func (r *SQLServerReconciler) setConditionAndReturn(ctx context.Context, srv *v1alpha1.SQLServer,
 	status metav1.ConditionStatus, reason, message string) (ctrl.Result, error) {
 
@@ -154,22 +155,22 @@ func (r *SQLServerReconciler) setConditionAndReturn(ctx context.Context, srv *v1
 	return ctrl.Result{}, nil
 }
 
-func mapSecretToSQLServers(ctx context.Context, c client.Client) func(context.Context, client.Object) []reconcile.Request {
+func mapSecretToSQLServers(c client.Client) func(context.Context, client.Object) []reconcile.Request {
 	return func(ctx context.Context, obj client.Object) []reconcile.Request {
 		var list v1alpha1.SQLServerList
 		if err := c.List(ctx, &list); err != nil {
 			return nil
 		}
 		var requests []reconcile.Request
-		for _, srv := range list.Items {
-			if srv.Spec.CredentialsSecret != nil && srv.Spec.CredentialsSecret.Name == obj.GetName() {
-				ns := srv.Namespace
-				if srv.Spec.CredentialsSecret.Namespace != nil {
-					ns = *srv.Spec.CredentialsSecret.Namespace
+		for i := range list.Items {
+			if list.Items[i].Spec.CredentialsSecret != nil && list.Items[i].Spec.CredentialsSecret.Name == obj.GetName() {
+				ns := list.Items[i].Namespace
+				if list.Items[i].Spec.CredentialsSecret.Namespace != nil {
+					ns = *list.Items[i].Spec.CredentialsSecret.Namespace
 				}
 				if ns == obj.GetNamespace() {
 					requests = append(requests, reconcile.Request{
-						NamespacedName: types.NamespacedName{Name: srv.Name, Namespace: srv.Namespace},
+						NamespacedName: types.NamespacedName{Name: list.Items[i].Name, Namespace: list.Items[i].Namespace},
 					})
 				}
 			}
@@ -181,7 +182,7 @@ func mapSecretToSQLServers(ctx context.Context, c client.Client) func(context.Co
 func (r *SQLServerReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&v1alpha1.SQLServer{}, builder.WithPredicates(predicate.GenerationChangedPredicate{})).
-		Watches(&corev1.Secret{}, handler.EnqueueRequestsFromMapFunc(mapSecretToSQLServers(context.Background(), mgr.GetClient()))).
+		Watches(&corev1.Secret{}, handler.EnqueueRequestsFromMapFunc(mapSecretToSQLServers(mgr.GetClient()))).
 		WithOptions(controller.Options{
 			MaxConcurrentReconciles: 3,
 			RateLimiter: workqueue.NewTypedMaxOfRateLimiter(

@@ -41,6 +41,7 @@ issues:
       linters:
         - gocritic
         - unparam
+        - errcheck
     # Generated files
     - path: zz_generated
       linters:

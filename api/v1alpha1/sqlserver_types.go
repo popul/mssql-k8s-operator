@@ -9,9 +9,9 @@ import (
 type AuthenticationMethod string
 
 const (
-	AuthSqlLogin         AuthenticationMethod = "SqlLogin"
-	AuthAzureAD          AuthenticationMethod = "AzureAD"
-	AuthManagedIdentity  AuthenticationMethod = "ManagedIdentity"
+	AuthSqlLogin        AuthenticationMethod = "SqlLogin"
+	AuthAzureAD         AuthenticationMethod = "AzureAD"
+	AuthManagedIdentity AuthenticationMethod = "ManagedIdentity"
 )
 
 // AzureADAuth defines Azure AD / Entra ID authentication parameters.

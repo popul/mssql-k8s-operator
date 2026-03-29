@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"time"
 
+	"golang.org/x/time/rate"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
@@ -20,7 +21,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
-	"golang.org/x/time/rate"
 
 	v1alpha1 "github.com/popul/mssql-k8s-operator/api/v1alpha1"
 	opmetrics "github.com/popul/mssql-k8s-operator/internal/metrics"
@@ -104,15 +104,16 @@ func (r *RestoreReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	defer cancel()
 
 	var restoreErr error
-	if restore.Spec.StopAt != nil && restore.Spec.LogSource != nil {
+	switch {
+	case restore.Spec.StopAt != nil && restore.Spec.LogSource != nil:
 		restoreErr = sqlClient.RestoreDatabasePIT(sqlCtx, restore.Spec.DatabaseName, restore.Spec.Source, *restore.Spec.LogSource, *restore.Spec.StopAt)
-	} else if len(restore.Spec.WithMove) > 0 {
+	case len(restore.Spec.WithMove) > 0:
 		moves := make(map[string]string, len(restore.Spec.WithMove))
 		for _, m := range restore.Spec.WithMove {
 			moves[m.LogicalName] = m.PhysicalPath
 		}
 		restoreErr = sqlClient.RestoreDatabaseWithMove(sqlCtx, restore.Spec.DatabaseName, restore.Spec.Source, moves)
-	} else {
+	default:
 		restoreErr = sqlClient.RestoreDatabase(sqlCtx, restore.Spec.DatabaseName, restore.Spec.Source)
 	}
 
@@ -153,6 +154,7 @@ func (r *RestoreReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	return ctrl.Result{}, nil
 }
 
+//nolint:unparam // condStatus kept for API consistency
 func (r *RestoreReconciler) setRestoreStatus(ctx context.Context, restore *v1alpha1.Restore,
 	phase v1alpha1.RestorePhase, condStatus metav1.ConditionStatus, reason, message string) (ctrl.Result, error) {
 
@@ -177,7 +179,7 @@ func (r *RestoreReconciler) setRestoreStatus(ctx context.Context, restore *v1alp
 func (r *RestoreReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&v1alpha1.Restore{}, builder.WithPredicates(predicate.GenerationChangedPredicate{})).
-		Watches(&corev1.Secret{}, handler.EnqueueRequestsFromMapFunc(mapSecretToRestores(context.Background(), mgr.GetClient()))).
+		Watches(&corev1.Secret{}, handler.EnqueueRequestsFromMapFunc(mapSecretToRestores(mgr.GetClient()))).
 		WithOptions(controller.Options{
 			MaxConcurrentReconciles: 5,
 			RateLimiter: workqueue.NewTypedMaxOfRateLimiter(

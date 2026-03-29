@@ -36,9 +36,9 @@ const (
 type SecondaryRole string
 
 const (
-	SecondaryRoleAllowAll      SecondaryRole = "AllowAllConnections"
+	SecondaryRoleAllowAll       SecondaryRole = "AllowAllConnections"
 	SecondaryRoleReadIntentOnly SecondaryRole = "AllowReadIntentOnly"
-	SecondaryRoleNo            SecondaryRole = "No"
+	SecondaryRoleNo             SecondaryRole = "No"
 )
 
 // AGReplicaSpec defines a replica participating in the Availability Group.

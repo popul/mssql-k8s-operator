@@ -51,16 +51,16 @@ type SQLClient interface {
 	LoginHasUsers(ctx context.Context, loginName string) (bool, error)
 
 	// Backup/Restore operations
-	BackupDatabase(ctx context.Context, dbName, destination string, backupType string, compression bool) error
+	BackupDatabase(ctx context.Context, dbName, destination, backupType string, compression bool) error
 	RestoreDatabase(ctx context.Context, dbName, source string) error
 
 	// Availability Group operations
 	AGExists(ctx context.Context, agName string) (bool, error)
-	CreateAG(ctx context.Context, config AGConfig) error
+	CreateAG(ctx context.Context, config *AGConfig) error
 	GetAGStatus(ctx context.Context, agName string) (*AGStatus, error)
 	AddDatabaseToAG(ctx context.Context, agName, dbName string) error
 	RemoveDatabaseFromAG(ctx context.Context, agName, dbName string) error
-	JoinAG(ctx context.Context, agName string, clusterType string) error
+	JoinAG(ctx context.Context, agName, clusterType string) error
 	GrantAGCreateDatabase(ctx context.Context, agName string) error
 	AddListenerToAG(ctx context.Context, agName string, listener AGListenerConfig) error
 	DropAG(ctx context.Context, agName string) error

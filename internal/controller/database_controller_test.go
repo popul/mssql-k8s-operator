@@ -183,11 +183,6 @@ func TestDatabaseReconcile_OwnerUpdate(t *testing.T) {
 	r.Reconcile(context.Background(), reqFor("mydb"))
 	mockSQL.ResetCalls()
 
-	// Owner should have been set
-	if mockSQL.WasCalled("SetDatabaseOwner") {
-		// May be called in first reconcile, that's fine
-	}
-
 	// Change the owner in the mock to simulate drift
 	currentOwner, _ := mockSQL.GetDatabaseOwner(context.Background(), "mydb")
 	if currentOwner != "newowner" {

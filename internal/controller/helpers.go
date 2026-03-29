@@ -25,7 +25,7 @@ const (
 )
 
 // getCredentialsFromSecret reads "username" and "password" keys from a Kubernetes Secret.
-func getCredentialsFromSecret(ctx context.Context, c client.Client, namespace, secretName string) (string, string, error) {
+func getCredentialsFromSecret(ctx context.Context, c client.Client, namespace, secretName string) (user, pass string, err error) {
 	var secret corev1.Secret
 	if err := c.Get(ctx, types.NamespacedName{Name: secretName, Namespace: namespace}, &secret); err != nil {
 		return "", "", err
@@ -39,26 +39,6 @@ func getCredentialsFromSecret(ctx context.Context, c client.Client, namespace, s
 		return "", "", fmt.Errorf("secret %q missing 'password' key", secretName)
 	}
 	return string(username), string(password), nil
-}
-
-// getSecretValue reads a specific key from a Secret, supporting cross-namespace references.
-func getSecretValue(ctx context.Context, c client.Client, namespace string, ref *v1alpha1.CrossNamespaceSecretReference, key string) (string, error) {
-	if ref == nil {
-		return "", fmt.Errorf("secret reference is nil")
-	}
-	ns := namespace
-	if ref.Namespace != nil {
-		ns = *ref.Namespace
-	}
-	var secret corev1.Secret
-	if err := c.Get(ctx, types.NamespacedName{Name: ref.Name, Namespace: ns}, &secret); err != nil {
-		return "", err
-	}
-	val, ok := secret.Data[key]
-	if !ok {
-		return "", fmt.Errorf("secret %q in namespace %q missing key %q", ref.Name, ns, key)
-	}
-	return string(val), nil
 }
 
 // connectToSQL creates a SQL client from a ServerReference, credentials, and factory.
@@ -89,17 +69,17 @@ func toSet(items []string) map[string]bool {
 }
 
 // mapSecretToDatabases returns reconcile requests for all Database CRs that reference the given Secret.
-func mapSecretToDatabases(ctx context.Context, c client.Client) func(context.Context, client.Object) []reconcile.Request {
+func mapSecretToDatabases(c client.Client) func(context.Context, client.Object) []reconcile.Request {
 	return func(ctx context.Context, obj client.Object) []reconcile.Request {
 		var list v1alpha1.DatabaseList
 		if err := c.List(ctx, &list, client.InNamespace(obj.GetNamespace())); err != nil {
 			return nil
 		}
 		var requests []reconcile.Request
-		for _, db := range list.Items {
-			if db.Spec.Server.CredentialsSecret.Name == obj.GetName() {
+		for i := range list.Items {
+			if list.Items[i].Spec.Server.CredentialsSecret.Name == obj.GetName() {
 				requests = append(requests, reconcile.Request{
-					NamespacedName: types.NamespacedName{Name: db.Name, Namespace: db.Namespace},
+					NamespacedName: types.NamespacedName{Name: list.Items[i].Name, Namespace: list.Items[i].Namespace},
 				})
 			}
 		}
@@ -108,18 +88,18 @@ func mapSecretToDatabases(ctx context.Context, c client.Client) func(context.Con
 }
 
 // mapSecretToLogins returns reconcile requests for all Login CRs that reference the given Secret.
-func mapSecretToLogins(ctx context.Context, c client.Client) func(context.Context, client.Object) []reconcile.Request {
+func mapSecretToLogins(c client.Client) func(context.Context, client.Object) []reconcile.Request {
 	return func(ctx context.Context, obj client.Object) []reconcile.Request {
 		var list v1alpha1.LoginList
 		if err := c.List(ctx, &list, client.InNamespace(obj.GetNamespace())); err != nil {
 			return nil
 		}
 		var requests []reconcile.Request
-		for _, login := range list.Items {
-			if login.Spec.Server.CredentialsSecret.Name == obj.GetName() ||
-				login.Spec.PasswordSecret.Name == obj.GetName() {
+		for i := range list.Items {
+			if list.Items[i].Spec.Server.CredentialsSecret.Name == obj.GetName() ||
+				list.Items[i].Spec.PasswordSecret.Name == obj.GetName() {
 				requests = append(requests, reconcile.Request{
-					NamespacedName: types.NamespacedName{Name: login.Name, Namespace: login.Namespace},
+					NamespacedName: types.NamespacedName{Name: list.Items[i].Name, Namespace: list.Items[i].Namespace},
 				})
 			}
 		}
@@ -128,17 +108,17 @@ func mapSecretToLogins(ctx context.Context, c client.Client) func(context.Contex
 }
 
 // mapSecretToDatabaseUsers returns reconcile requests for all DatabaseUser CRs that reference the given Secret.
-func mapSecretToDatabaseUsers(ctx context.Context, c client.Client) func(context.Context, client.Object) []reconcile.Request {
+func mapSecretToDatabaseUsers(c client.Client) func(context.Context, client.Object) []reconcile.Request {
 	return func(ctx context.Context, obj client.Object) []reconcile.Request {
 		var list v1alpha1.DatabaseUserList
 		if err := c.List(ctx, &list, client.InNamespace(obj.GetNamespace())); err != nil {
 			return nil
 		}
 		var requests []reconcile.Request
-		for _, user := range list.Items {
-			if user.Spec.Server.CredentialsSecret.Name == obj.GetName() {
+		for i := range list.Items {
+			if list.Items[i].Spec.Server.CredentialsSecret.Name == obj.GetName() {
 				requests = append(requests, reconcile.Request{
-					NamespacedName: types.NamespacedName{Name: user.Name, Namespace: user.Namespace},
+					NamespacedName: types.NamespacedName{Name: list.Items[i].Name, Namespace: list.Items[i].Namespace},
 				})
 			}
 		}
@@ -147,17 +127,17 @@ func mapSecretToDatabaseUsers(ctx context.Context, c client.Client) func(context
 }
 
 // mapSecretToSchemas returns reconcile requests for all Schema CRs that reference the given Secret.
-func mapSecretToSchemas(ctx context.Context, c client.Client) func(context.Context, client.Object) []reconcile.Request {
+func mapSecretToSchemas(c client.Client) func(context.Context, client.Object) []reconcile.Request {
 	return func(ctx context.Context, obj client.Object) []reconcile.Request {
 		var list v1alpha1.SchemaList
 		if err := c.List(ctx, &list, client.InNamespace(obj.GetNamespace())); err != nil {
 			return nil
 		}
 		var requests []reconcile.Request
-		for _, s := range list.Items {
-			if s.Spec.Server.CredentialsSecret.Name == obj.GetName() {
+		for i := range list.Items {
+			if list.Items[i].Spec.Server.CredentialsSecret.Name == obj.GetName() {
 				requests = append(requests, reconcile.Request{
-					NamespacedName: types.NamespacedName{Name: s.Name, Namespace: s.Namespace},
+					NamespacedName: types.NamespacedName{Name: list.Items[i].Name, Namespace: list.Items[i].Namespace},
 				})
 			}
 		}
@@ -166,17 +146,17 @@ func mapSecretToSchemas(ctx context.Context, c client.Client) func(context.Conte
 }
 
 // mapSecretToPermissions returns reconcile requests for all Permission CRs that reference the given Secret.
-func mapSecretToPermissions(ctx context.Context, c client.Client) func(context.Context, client.Object) []reconcile.Request {
+func mapSecretToPermissions(c client.Client) func(context.Context, client.Object) []reconcile.Request {
 	return func(ctx context.Context, obj client.Object) []reconcile.Request {
 		var list v1alpha1.PermissionList
 		if err := c.List(ctx, &list, client.InNamespace(obj.GetNamespace())); err != nil {
 			return nil
 		}
 		var requests []reconcile.Request
-		for _, p := range list.Items {
-			if p.Spec.Server.CredentialsSecret.Name == obj.GetName() {
+		for i := range list.Items {
+			if list.Items[i].Spec.Server.CredentialsSecret.Name == obj.GetName() {
 				requests = append(requests, reconcile.Request{
-					NamespacedName: types.NamespacedName{Name: p.Name, Namespace: p.Namespace},
+					NamespacedName: types.NamespacedName{Name: list.Items[i].Name, Namespace: list.Items[i].Namespace},
 				})
 			}
 		}
@@ -185,17 +165,17 @@ func mapSecretToPermissions(ctx context.Context, c client.Client) func(context.C
 }
 
 // mapSecretToBackups returns reconcile requests for all Backup CRs that reference the given Secret.
-func mapSecretToBackups(ctx context.Context, c client.Client) func(context.Context, client.Object) []reconcile.Request {
+func mapSecretToBackups(c client.Client) func(context.Context, client.Object) []reconcile.Request {
 	return func(ctx context.Context, obj client.Object) []reconcile.Request {
 		var list v1alpha1.BackupList
 		if err := c.List(ctx, &list, client.InNamespace(obj.GetNamespace())); err != nil {
 			return nil
 		}
 		var requests []reconcile.Request
-		for _, b := range list.Items {
-			if b.Spec.Server.CredentialsSecret.Name == obj.GetName() {
+		for i := range list.Items {
+			if list.Items[i].Spec.Server.CredentialsSecret.Name == obj.GetName() {
 				requests = append(requests, reconcile.Request{
-					NamespacedName: types.NamespacedName{Name: b.Name, Namespace: b.Namespace},
+					NamespacedName: types.NamespacedName{Name: list.Items[i].Name, Namespace: list.Items[i].Namespace},
 				})
 			}
 		}
@@ -204,17 +184,17 @@ func mapSecretToBackups(ctx context.Context, c client.Client) func(context.Conte
 }
 
 // mapSecretToRestores returns reconcile requests for all Restore CRs that reference the given Secret.
-func mapSecretToRestores(ctx context.Context, c client.Client) func(context.Context, client.Object) []reconcile.Request {
+func mapSecretToRestores(c client.Client) func(context.Context, client.Object) []reconcile.Request {
 	return func(ctx context.Context, obj client.Object) []reconcile.Request {
 		var list v1alpha1.RestoreList
 		if err := c.List(ctx, &list, client.InNamespace(obj.GetNamespace())); err != nil {
 			return nil
 		}
 		var requests []reconcile.Request
-		for _, r := range list.Items {
-			if r.Spec.Server.CredentialsSecret.Name == obj.GetName() {
+		for i := range list.Items {
+			if list.Items[i].Spec.Server.CredentialsSecret.Name == obj.GetName() {
 				requests = append(requests, reconcile.Request{
-					NamespacedName: types.NamespacedName{Name: r.Name, Namespace: r.Namespace},
+					NamespacedName: types.NamespacedName{Name: list.Items[i].Name, Namespace: list.Items[i].Namespace},
 				})
 			}
 		}
@@ -223,18 +203,18 @@ func mapSecretToRestores(ctx context.Context, c client.Client) func(context.Cont
 }
 
 // mapSecretToAGs returns reconcile requests for all AvailabilityGroup CRs that reference the given Secret.
-func mapSecretToAGs(ctx context.Context, c client.Client) func(context.Context, client.Object) []reconcile.Request {
+func mapSecretToAGs(c client.Client) func(context.Context, client.Object) []reconcile.Request {
 	return func(ctx context.Context, obj client.Object) []reconcile.Request {
 		var list v1alpha1.AvailabilityGroupList
 		if err := c.List(ctx, &list, client.InNamespace(obj.GetNamespace())); err != nil {
 			return nil
 		}
 		var requests []reconcile.Request
-		for _, ag := range list.Items {
-			for _, replica := range ag.Spec.Replicas {
-				if replica.Server.CredentialsSecret.Name == obj.GetName() {
+		for i := range list.Items {
+			for j := range list.Items[i].Spec.Replicas {
+				if list.Items[i].Spec.Replicas[j].Server.CredentialsSecret.Name == obj.GetName() {
 					requests = append(requests, reconcile.Request{
-						NamespacedName: types.NamespacedName{Name: ag.Name, Namespace: ag.Namespace},
+						NamespacedName: types.NamespacedName{Name: list.Items[i].Name, Namespace: list.Items[i].Namespace},
 					})
 					break
 				}

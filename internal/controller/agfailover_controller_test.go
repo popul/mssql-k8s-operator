@@ -66,7 +66,7 @@ func getFailoverCondition(fo *v1alpha1.AGFailover, condType string) *metav1.Cond
 
 // setupMockAG creates an AG with sql-0 as primary and sql-1 as secondary.
 func setupMockAG(mockSQL *sqlclient.MockClient) {
-	mockSQL.CreateAG(context.Background(), sqlclient.AGConfig{
+	mockSQL.CreateAG(context.Background(), &sqlclient.AGConfig{
 		Name:                      "myag",
 		Replicas:                  []sqlclient.AGReplicaConfig{{ServerName: "sql-0"}, {ServerName: "sql-1"}},
 		AutomatedBackupPreference: "SECONDARY",

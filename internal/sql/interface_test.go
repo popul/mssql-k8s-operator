@@ -120,7 +120,7 @@ func (c *interfaceChecker) RevokePermission(ctx context.Context, dbName, permiss
 	return nil
 }
 
-func (c *interfaceChecker) BackupDatabase(ctx context.Context, dbName, destination string, backupType string, compression bool) error {
+func (c *interfaceChecker) BackupDatabase(ctx context.Context, dbName, destination, backupType string, compression bool) error {
 	return nil
 }
 func (c *interfaceChecker) RestoreDatabase(ctx context.Context, dbName, source string) error {
@@ -130,7 +130,7 @@ func (c *interfaceChecker) RestoreDatabase(ctx context.Context, dbName, source s
 func (c *interfaceChecker) AGExists(ctx context.Context, agName string) (bool, error) {
 	return false, nil
 }
-func (c *interfaceChecker) CreateAG(ctx context.Context, config AGConfig) error { return nil }
+func (c *interfaceChecker) CreateAG(ctx context.Context, config *AGConfig) error { return nil }
 func (c *interfaceChecker) GetAGStatus(ctx context.Context, agName string) (*AGStatus, error) {
 	return nil, nil
 }
@@ -140,7 +140,7 @@ func (c *interfaceChecker) AddDatabaseToAG(ctx context.Context, agName, dbName s
 func (c *interfaceChecker) RemoveDatabaseFromAG(ctx context.Context, agName, dbName string) error {
 	return nil
 }
-func (c *interfaceChecker) JoinAG(ctx context.Context, agName string, clusterType string) error {
+func (c *interfaceChecker) JoinAG(ctx context.Context, agName, clusterType string) error {
 	return nil
 }
 func (c *interfaceChecker) GrantAGCreateDatabase(ctx context.Context, agName string) error {

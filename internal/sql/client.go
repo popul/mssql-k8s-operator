@@ -487,7 +487,7 @@ func (c *MSSQLClient) AGExists(ctx context.Context, agName string) (bool, error)
 	return exists, err
 }
 
-func (c *MSSQLClient) CreateAG(ctx context.Context, config AGConfig) error {
+func (c *MSSQLClient) CreateAG(ctx context.Context, config *AGConfig) error {
 	// Build CREATE AVAILABILITY GROUP statement.
 	// T-SQL syntax: CREATE AVAILABILITY GROUP [name] WITH (...) FOR REPLICA ON ...
 	var b strings.Builder
@@ -622,7 +622,7 @@ func (c *MSSQLClient) RemoveDatabaseFromAG(ctx context.Context, agName, dbName s
 	return nil
 }
 
-func (c *MSSQLClient) JoinAG(ctx context.Context, agName string, clusterType string) error {
+func (c *MSSQLClient) JoinAG(ctx context.Context, agName, clusterType string) error {
 	query := fmt.Sprintf("ALTER AVAILABILITY GROUP %s JOIN", QuoteName(agName))
 	if clusterType == "NONE" {
 		query += " WITH (CLUSTER_TYPE = NONE)"
@@ -728,7 +728,7 @@ func (c *MSSQLClient) HADREndpointExists(ctx context.Context) (bool, error) {
 
 // --- Backup/Restore operations ---
 
-func (c *MSSQLClient) BackupDatabase(ctx context.Context, dbName, destination string, backupType string, compression bool) error {
+func (c *MSSQLClient) BackupDatabase(ctx context.Context, dbName, destination, backupType string, compression bool) error {
 	query := fmt.Sprintf("BACKUP DATABASE %s TO DISK = %s", QuoteName(dbName), QuoteString(destination))
 
 	var withClauses []string

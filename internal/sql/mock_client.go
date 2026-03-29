@@ -26,10 +26,10 @@ type MockLogin struct {
 
 // MockUser represents a database user in the mock.
 type MockUser struct {
-	DBName    string
-	UserName  string
-	LoginName string
-	Roles     []string
+	DBName      string
+	UserName    string
+	LoginName   string
+	Roles       []string
 	OwnsObjects bool
 }
 
@@ -53,8 +53,8 @@ type MockClient struct {
 	mu           sync.RWMutex
 	databases    map[string]*MockDatabase
 	logins       map[string]*MockLogin
-	users        map[string]*MockUser       // key: "dbName/userName"
-	schemas      map[string]*MockSchema     // key: "dbName/schemaName"
+	users        map[string]*MockUser        // key: "dbName/userName"
+	schemas      map[string]*MockSchema      // key: "dbName/schemaName"
 	permissions  map[string][]MockPermission // key: "dbName/userName"
 	ags          map[string]*MockAG          // key: AG name
 	calls        map[string]int
@@ -641,7 +641,7 @@ func (m *MockClient) GetPermissions(_ context.Context, dbName, userName string) 
 	perms := m.permissions[permKey(dbName, userName)]
 	result := make([]PermissionState, len(perms))
 	for i, p := range perms {
-		result[i] = PermissionState{Permission: p.Permission, Target: p.Target, State: p.State}
+		result[i] = PermissionState(p)
 	}
 	return result, nil
 }
@@ -752,7 +752,7 @@ func (m *MockClient) AGExists(_ context.Context, agName string) (bool, error) {
 	return ok, nil
 }
 
-func (m *MockClient) CreateAG(_ context.Context, config AGConfig) error {
+func (m *MockClient) CreateAG(_ context.Context, config *AGConfig) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.track("CreateAG")
@@ -858,7 +858,7 @@ func (m *MockClient) RemoveDatabaseFromAG(_ context.Context, agName, dbName stri
 	return nil
 }
 
-func (m *MockClient) JoinAG(_ context.Context, agName string, clusterType string) error {
+func (m *MockClient) JoinAG(_ context.Context, agName, clusterType string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.track("JoinAG")
@@ -1023,7 +1023,7 @@ func (m *MockClient) WasCalledLocked(method string) bool {
 
 // --- Backup/Restore operations ---
 
-func (m *MockClient) BackupDatabase(_ context.Context, dbName, destination string, backupType string, compression bool) error {
+func (m *MockClient) BackupDatabase(_ context.Context, dbName, destination, backupType string, compression bool) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.track("BackupDatabase")

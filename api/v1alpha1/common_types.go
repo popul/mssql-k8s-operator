@@ -59,19 +59,19 @@ const (
 
 // Reason constants for status conditions.
 const (
-	ReasonReady                     = "Ready"
-	ReasonConnectionFailed          = "ConnectionFailed"
-	ReasonSecretNotFound            = "SecretNotFound"
-	ReasonInvalidCredentialsSecret  = "InvalidCredentialsSecret"
-	ReasonImmutableFieldChanged     = "ImmutableFieldChanged"
+	ReasonReady                       = "Ready"
+	ReasonConnectionFailed            = "ConnectionFailed"
+	ReasonSecretNotFound              = "SecretNotFound"
+	ReasonInvalidCredentialsSecret    = "InvalidCredentialsSecret"
+	ReasonImmutableFieldChanged       = "ImmutableFieldChanged"
 	ReasonCollationChangeNotSupported = "CollationChangeNotSupported"
-	ReasonLoginInUse                = "LoginInUse"
-	ReasonLoginRefNotFound          = "LoginRefNotFound"
-	ReasonLoginNotReady             = "LoginNotReady"
-	ReasonUserOwnsObjects           = "UserOwnsObjects"
-	ReasonInvalidServerRole         = "InvalidServerRole"
-	ReasonDatabaseProvisioning      = "DatabaseProvisioning"
-	ReasonSchemaNotEmpty            = "SchemaNotEmpty"
+	ReasonLoginInUse                  = "LoginInUse"
+	ReasonLoginRefNotFound            = "LoginRefNotFound"
+	ReasonLoginNotReady               = "LoginNotReady"
+	ReasonUserOwnsObjects             = "UserOwnsObjects"
+	ReasonInvalidServerRole           = "InvalidServerRole"
+	ReasonDatabaseProvisioning        = "DatabaseProvisioning"
+	ReasonSchemaNotEmpty              = "SchemaNotEmpty"
 )
 
 // Finalizer name used by all CRDs in this operator.

@@ -34,9 +34,9 @@ import (
 )
 
 const (
-	defaultNamespace    = "e2e-test"
-	defaultSAPassword   = "P@ssw0rd123!"
-	defaultSQLImage     = "mcr.microsoft.com/mssql/server:2022-latest"
+	defaultNamespace     = "e2e-test"
+	defaultSAPassword    = "P@ssw0rd123!"
+	defaultSQLImage      = "mcr.microsoft.com/mssql/server:2022-latest"
 	defaultOperatorImage = "mssql-k8s-operator:latest"
 
 	pollInterval = 2 * time.Second
@@ -47,15 +47,15 @@ const (
 )
 
 var (
-	k8sClient      client.Client
-	sqlClient      internalsql.SQLClient
-	ctx            context.Context
-	cancel         context.CancelFunc
-	portFwdCmd     *exec.Cmd
-	testNamespace  string
-	saPassword     string
-	sqlImage       string
-	operatorImage  string
+	k8sClient     client.Client
+	sqlClient     internalsql.SQLClient
+	ctx           context.Context
+	cancel        context.CancelFunc
+	portFwdCmd    *exec.Cmd
+	testNamespace string
+	saPassword    string
+	sqlImage      string
+	operatorImage string
 )
 
 func envOrDefault(key, fallback string) string {
@@ -2056,11 +2056,11 @@ func TestE2EBackupRestore(t *testing.T) {
 		backup := &mssqlv1.Backup{
 			ObjectMeta: metav1.ObjectMeta{Name: backupKey.Name, Namespace: backupKey.Namespace},
 			Spec: mssqlv1.BackupSpec{
-				Server:      serverRef(),
+				Server:       serverRef(),
 				DatabaseName: "backuptest",
-				Destination: "/var/opt/mssql/backup/backuptest.bak",
-				Type:        mssqlv1.BackupTypeFull,
-				Compression: ptr(true),
+				Destination:  "/var/opt/mssql/backup/backuptest.bak",
+				Type:         mssqlv1.BackupTypeFull,
+				Compression:  ptr(true),
 			},
 		}
 		if err := k8sClient.Create(ctx, backup); err != nil {
@@ -2557,11 +2557,11 @@ func TestE2EPointInTimeRestore(t *testing.T) {
 	fullBackup := &mssqlv1.Backup{
 		ObjectMeta: metav1.ObjectMeta{Name: fullBackupKey.Name, Namespace: fullBackupKey.Namespace},
 		Spec: mssqlv1.BackupSpec{
-			Server:      serverRef(),
+			Server:       serverRef(),
 			DatabaseName: dbName,
-			Destination: fmt.Sprintf("/var/opt/mssql/backup/%s-full.bak", dbName),
-			Type:        mssqlv1.BackupTypeFull,
-			Compression: ptr(true),
+			Destination:  fmt.Sprintf("/var/opt/mssql/backup/%s-full.bak", dbName),
+			Type:         mssqlv1.BackupTypeFull,
+			Compression:  ptr(true),
 		},
 	}
 	if err := k8sClient.Create(ctx, fullBackup); err != nil {
@@ -2589,11 +2589,11 @@ func TestE2EPointInTimeRestore(t *testing.T) {
 	logBackup := &mssqlv1.Backup{
 		ObjectMeta: metav1.ObjectMeta{Name: logBackupKey.Name, Namespace: logBackupKey.Namespace},
 		Spec: mssqlv1.BackupSpec{
-			Server:      serverRef(),
+			Server:       serverRef(),
 			DatabaseName: dbName,
-			Destination: fmt.Sprintf("/var/opt/mssql/backup/%s-log.trn", dbName),
-			Type:        mssqlv1.BackupTypeLog,
-			Compression: ptr(true),
+			Destination:  fmt.Sprintf("/var/opt/mssql/backup/%s-log.trn", dbName),
+			Type:         mssqlv1.BackupTypeLog,
+			Compression:  ptr(true),
 		},
 	}
 	if err := k8sClient.Create(ctx, logBackup); err != nil {
@@ -2692,10 +2692,10 @@ func TestE2ERestoreWithMove(t *testing.T) {
 	backup := &mssqlv1.Backup{
 		ObjectMeta: metav1.ObjectMeta{Name: backupKey.Name, Namespace: backupKey.Namespace},
 		Spec: mssqlv1.BackupSpec{
-			Server:      serverRef(),
+			Server:       serverRef(),
 			DatabaseName: dbName,
-			Destination: fmt.Sprintf("/var/opt/mssql/backup/%s.bak", dbName),
-			Type:        mssqlv1.BackupTypeFull,
+			Destination:  fmt.Sprintf("/var/opt/mssql/backup/%s.bak", dbName),
+			Type:         mssqlv1.BackupTypeFull,
 		},
 	}
 	if err := k8sClient.Create(ctx, backup); err != nil {

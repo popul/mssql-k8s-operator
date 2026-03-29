@@ -6,8 +6,9 @@ import (
 	"os"
 	"time"
 
-	corev1 "k8s.io/api/core/v1"
+	"golang.org/x/time/rate"
 	coordinationv1 "k8s.io/api/coordination/v1"
+	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -24,7 +25,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
-	"golang.org/x/time/rate"
 
 	v1alpha1 "github.com/popul/mssql-k8s-operator/api/v1alpha1"
 	opmetrics "github.com/popul/mssql-k8s-operator/internal/metrics"
@@ -216,20 +216,20 @@ func (r *AvailabilityGroupReconciler) createAG(ctx context.Context, ag *v1alpha1
 		config.Databases = append(config.Databases, db.Name)
 	}
 
-	for _, replica := range ag.Spec.Replicas {
+	for i := range ag.Spec.Replicas {
 		config.Replicas = append(config.Replicas, sqlclient.AGReplicaConfig{
-			ServerName:       replica.ServerName,
-			EndpointURL:      replica.EndpointURL,
-			AvailabilityMode: mapAvailabilityMode(replica.AvailabilityMode),
-			FailoverMode:     mapFailoverMode(replica.FailoverMode),
-			SeedingMode:      mapSeedingMode(replica.SeedingMode),
-			SecondaryRole:    mapSecondaryRole(replica.SecondaryRole),
+			ServerName:       ag.Spec.Replicas[i].ServerName,
+			EndpointURL:      ag.Spec.Replicas[i].EndpointURL,
+			AvailabilityMode: mapAvailabilityMode(ag.Spec.Replicas[i].AvailabilityMode),
+			FailoverMode:     mapFailoverMode(ag.Spec.Replicas[i].FailoverMode),
+			SeedingMode:      mapSeedingMode(ag.Spec.Replicas[i].SeedingMode),
+			SecondaryRole:    mapSecondaryRole(ag.Spec.Replicas[i].SecondaryRole),
 		})
 	}
 
 	sqlCtx, cancel := sqlContext(ctx)
 	defer cancel()
-	return primaryClient.CreateAG(sqlCtx, config)
+	return primaryClient.CreateAG(sqlCtx, &config)
 }
 
 func (r *AvailabilityGroupReconciler) joinSecondaries(ctx context.Context, ag *v1alpha1.AvailabilityGroup) error {
@@ -316,30 +316,32 @@ func (r *AvailabilityGroupReconciler) reconcileDatabases(ctx context.Context, ag
 
 	// Add missing databases
 	for dbName := range desired {
-		if !current[dbName] {
-			sqlCtx2, cancel2 := sqlContext(ctx)
-			err := primaryClient.AddDatabaseToAG(sqlCtx2, ag.Spec.AGName, dbName)
-			cancel2()
-			if err != nil {
-				return fmt.Errorf("failed to add database %s to AG: %w", dbName, err)
-			}
-			r.Recorder.Event(ag, corev1.EventTypeNormal, "DatabaseAddedToAG",
-				fmt.Sprintf("Database %s added to AG %s", dbName, ag.Spec.AGName))
+		if current[dbName] {
+			continue
 		}
+		sqlCtx2, cancel2 := sqlContext(ctx)
+		err := primaryClient.AddDatabaseToAG(sqlCtx2, ag.Spec.AGName, dbName)
+		cancel2()
+		if err != nil {
+			return fmt.Errorf("failed to add database %s to AG: %w", dbName, err)
+		}
+		r.Recorder.Event(ag, corev1.EventTypeNormal, "DatabaseAddedToAG",
+			fmt.Sprintf("Database %s added to AG %s", dbName, ag.Spec.AGName))
 	}
 
 	// Remove databases no longer in spec
 	for dbName := range current {
-		if !desired[dbName] {
-			sqlCtx3, cancel3 := sqlContext(ctx)
-			err := primaryClient.RemoveDatabaseFromAG(sqlCtx3, ag.Spec.AGName, dbName)
-			cancel3()
-			if err != nil {
-				return fmt.Errorf("failed to remove database %s from AG: %w", dbName, err)
-			}
-			r.Recorder.Event(ag, corev1.EventTypeNormal, "DatabaseRemovedFromAG",
-				fmt.Sprintf("Database %s removed from AG %s", dbName, ag.Spec.AGName))
+		if desired[dbName] {
+			continue
 		}
+		sqlCtx3, cancel3 := sqlContext(ctx)
+		err := primaryClient.RemoveDatabaseFromAG(sqlCtx3, ag.Spec.AGName, dbName)
+		cancel3()
+		if err != nil {
+			return fmt.Errorf("failed to remove database %s from AG: %w", dbName, err)
+		}
+		r.Recorder.Event(ag, corev1.EventTypeNormal, "DatabaseRemovedFromAG",
+			fmt.Sprintf("Database %s removed from AG %s", dbName, ag.Spec.AGName))
 	}
 
 	return nil
@@ -478,6 +480,7 @@ func (r *AvailabilityGroupReconciler) handleDeletion(ctx context.Context, ag *v1
 	return ctrl.Result{}, nil
 }
 
+//nolint:unparam // returns (Result, error) for consistent controller pattern
 func (r *AvailabilityGroupReconciler) setConditionAndReturn(ctx context.Context, ag *v1alpha1.AvailabilityGroup,
 	status metav1.ConditionStatus, reason, message string) (ctrl.Result, error) {
 
@@ -500,7 +503,7 @@ func (r *AvailabilityGroupReconciler) setConditionAndReturn(ctx context.Context,
 func (r *AvailabilityGroupReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&v1alpha1.AvailabilityGroup{}, builder.WithPredicates(predicate.GenerationChangedPredicate{})).
-		Watches(&corev1.Secret{}, handler.EnqueueRequestsFromMapFunc(mapSecretToAGs(context.Background(), mgr.GetClient()))).
+		Watches(&corev1.Secret{}, handler.EnqueueRequestsFromMapFunc(mapSecretToAGs(mgr.GetClient()))).
 		WithOptions(controller.Options{
 			MaxConcurrentReconciles: 2,
 			RateLimiter: workqueue.NewTypedMaxOfRateLimiter(

@@ -47,7 +47,7 @@ func TestReasonConstants(t *testing.T) {
 
 func TestServerReferenceDefaults(t *testing.T) {
 	ref := ServerReference{
-		Host: "localhost",
+		Host:              "localhost",
 		CredentialsSecret: SecretReference{Name: "sa-creds"},
 	}
 	if ref.Host != "localhost" {

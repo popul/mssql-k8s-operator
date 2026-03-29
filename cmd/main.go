@@ -63,11 +63,11 @@ func main() {
 			BindAddress: metricsAddr,
 		},
 		HealthProbeBindAddress: probeAddr,
-		LeaderElection:                enableLeaderElection,
-		LeaderElectionID:              "mssql-operator.popul.io",
-		LeaseDuration:                 &leaseDuration,
-		RenewDeadline:                 &renewDeadline,
-		RetryPeriod:                   &retryPeriod,
+		LeaderElection:         enableLeaderElection,
+		LeaderElectionID:       "mssql-operator.popul.io",
+		LeaseDuration:          &leaseDuration,
+		RenewDeadline:          &renewDeadline,
+		RetryPeriod:            &retryPeriod,
 	})
 	if err != nil {
 		setupLog.Error(err, "unable to start manager")

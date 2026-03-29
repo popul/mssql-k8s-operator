@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"time"
 
+	"golang.org/x/time/rate"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
@@ -22,7 +23,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
-	"golang.org/x/time/rate"
 
 	v1alpha1 "github.com/popul/mssql-k8s-operator/api/v1alpha1"
 	opmetrics "github.com/popul/mssql-k8s-operator/internal/metrics"
@@ -147,28 +147,32 @@ func (r *DatabaseUserReconciler) reconcileDatabaseRoles(ctx context.Context, dbU
 
 	// Add missing roles
 	for role := range desiredSet {
-		if !currentSet[role] {
-			sqlCtx2, cancel2 := sqlContext(ctx)
-			defer cancel2()
-			if err := sqlClient.AddUserToDatabaseRole(sqlCtx2, dbName, userName, role); err != nil {
-				return fmt.Errorf("failed to add role %s: %w", role, err)
-			}
-			r.Recorder.Event(dbUser, corev1.EventTypeNormal, "DatabaseRoleAdded",
-				fmt.Sprintf("User %s added to database role %s", userName, role))
+		if currentSet[role] {
+			continue
 		}
+		sqlCtx2, cancel2 := sqlContext(ctx)
+		err := sqlClient.AddUserToDatabaseRole(sqlCtx2, dbName, userName, role)
+		cancel2()
+		if err != nil {
+			return fmt.Errorf("failed to add role %s: %w", role, err)
+		}
+		r.Recorder.Event(dbUser, corev1.EventTypeNormal, "DatabaseRoleAdded",
+			fmt.Sprintf("User %s added to database role %s", userName, role))
 	}
 
 	// Remove extra roles
 	for role := range currentSet {
-		if !desiredSet[role] {
-			sqlCtx3, cancel3 := sqlContext(ctx)
-			defer cancel3()
-			if err := sqlClient.RemoveUserFromDatabaseRole(sqlCtx3, dbName, userName, role); err != nil {
-				return fmt.Errorf("failed to remove role %s: %w", role, err)
-			}
-			r.Recorder.Event(dbUser, corev1.EventTypeNormal, "DatabaseRoleRemoved",
-				fmt.Sprintf("User %s removed from database role %s", userName, role))
+		if desiredSet[role] {
+			continue
 		}
+		sqlCtx3, cancel3 := sqlContext(ctx)
+		err := sqlClient.RemoveUserFromDatabaseRole(sqlCtx3, dbName, userName, role)
+		cancel3()
+		if err != nil {
+			return fmt.Errorf("failed to remove role %s: %w", role, err)
+		}
+		r.Recorder.Event(dbUser, corev1.EventTypeNormal, "DatabaseRoleRemoved",
+			fmt.Sprintf("User %s removed from database role %s", userName, role))
 	}
 
 	return nil
@@ -258,7 +262,7 @@ func (r *DatabaseUserReconciler) setConditionAndReturn(ctx context.Context, dbUs
 func (r *DatabaseUserReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&v1alpha1.DatabaseUser{}, builder.WithPredicates(predicate.GenerationChangedPredicate{})).
-		Watches(&corev1.Secret{}, handler.EnqueueRequestsFromMapFunc(mapSecretToDatabaseUsers(context.Background(), mgr.GetClient()))).
+		Watches(&corev1.Secret{}, handler.EnqueueRequestsFromMapFunc(mapSecretToDatabaseUsers(mgr.GetClient()))).
 		WithOptions(controller.Options{
 			MaxConcurrentReconciles: 5,
 			RateLimiter: workqueue.NewTypedMaxOfRateLimiter(

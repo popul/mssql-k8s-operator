@@ -202,7 +202,7 @@ func TestSQLServer_NotFound(t *testing.T) {
 
 func TestResolveServerReference_Inline(t *testing.T) {
 	ref := v1alpha1.ServerReference{
-		Host: "direct.svc",
+		Host:              "direct.svc",
 		CredentialsSecret: v1alpha1.SecretReference{Name: "creds"},
 	}
 	scheme := newScheme()
@@ -221,8 +221,8 @@ func TestResolveServerReference_ViaSQLServerCR(t *testing.T) {
 	srv := &v1alpha1.SQLServer{
 		ObjectMeta: metav1.ObjectMeta{Name: "shared-sql", Namespace: "default"},
 		Spec: v1alpha1.SQLServerSpec{
-			Host: "shared.svc",
-			Port: &port,
+			Host:              "shared.svc",
+			Port:              &port,
 			CredentialsSecret: &v1alpha1.CrossNamespaceSecretReference{Name: "shared-creds"},
 		},
 	}
