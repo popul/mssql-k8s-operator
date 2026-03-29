@@ -31,6 +31,8 @@ This guide walks you through deploying a 2-node SQL Server Availability Group wi
 - `kubectl` and `helm` installed
 - The mssql-k8s-operator installed with CRDs
 
+> For a single-instance SQL Server setup, see [Deploy SQL Server in Kubernetes](deploy-sql-server.md). This guide deploys a multi-replica StatefulSet for HA.
+
 ## Step 1: Create the namespace and secrets
 
 ```bash

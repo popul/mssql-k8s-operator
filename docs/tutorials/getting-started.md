@@ -8,7 +8,7 @@ You need:
 
 - A running Kubernetes cluster (minikube, kind, or any 1.27+ cluster)
 - `kubectl` and `helm` installed
-- A SQL Server 2019+ instance accessible from inside the cluster
+- A SQL Server 2019+ instance accessible from inside the cluster (see [Deploy SQL Server in Kubernetes](../how-to/deploy-sql-server.md) if you don't have one)
 
 This tutorial uses `mssql.database.svc.cluster.local` as the SQL Server address. Replace it with your actual address.
 
