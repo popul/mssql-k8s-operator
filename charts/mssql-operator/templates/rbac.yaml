@@ -6,13 +6,13 @@ metadata:
     {{- include "mssql-operator.labels" . | nindent 4 }}
 rules:
   - apiGroups: ["mssql.popul.io"]
-    resources: ["databases", "logins", "databaseusers"]
+    resources: ["databases", "logins", "databaseusers", "schemas", "permissions", "backups", "restores", "scheduledbackups", "sqlservers", "availabilitygroups", "agfailovers"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
   - apiGroups: ["mssql.popul.io"]
-    resources: ["databases/status", "logins/status", "databaseusers/status"]
+    resources: ["databases/status", "logins/status", "databaseusers/status", "schemas/status", "permissions/status", "backups/status", "restores/status", "scheduledbackups/status", "sqlservers/status", "availabilitygroups/status", "agfailovers/status"]
     verbs: ["get", "update", "patch"]
   - apiGroups: ["mssql.popul.io"]
-    resources: ["databases/finalizers", "logins/finalizers", "databaseusers/finalizers"]
+    resources: ["databases/finalizers", "logins/finalizers", "databaseusers/finalizers", "schemas/finalizers", "permissions/finalizers", "backups/finalizers", "restores/finalizers", "scheduledbackups/finalizers", "sqlservers/finalizers", "availabilitygroups/finalizers", "agfailovers/finalizers"]
     verbs: ["update"]
   - apiGroups: [""]
     resources: ["secrets"]

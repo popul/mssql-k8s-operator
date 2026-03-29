@@ -42,6 +42,9 @@ spec:
             - --leader-elect-renew-deadline={{ .Values.leaderElection.renewDeadline }}
             - --leader-elect-retry-period={{ .Values.leaderElection.retryPeriod }}
             {{- end }}
+            {{- if .Values.webhook.enabled }}
+            - --enable-webhooks
+            {{- end }}
           ports:
             - name: metrics
               containerPort: {{ .Values.metrics.port }}
@@ -49,6 +52,17 @@ spec:
             - name: health
               containerPort: {{ .Values.health.port }}
               protocol: TCP
+            {{- if .Values.webhook.enabled }}
+            - name: webhook
+              containerPort: {{ .Values.webhook.port }}
+              protocol: TCP
+            {{- end }}
+          {{- if .Values.webhook.enabled }}
+          volumeMounts:
+            - name: webhook-certs
+              mountPath: /tmp/k8s-webhook-server/serving-certs
+              readOnly: true
+          {{- end }}
           livenessProbe:
             httpGet:
               path: /healthz
@@ -98,4 +112,10 @@ spec:
       {{- with .Values.tolerations }}
       tolerations:
         {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- if .Values.webhook.enabled }}
+      volumes:
+        - name: webhook-certs
+          secret:
+            secretName: {{ include "mssql-operator.fullname" . }}-webhook-tls
       {{- end }}

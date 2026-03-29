@@ -393,18 +393,20 @@ func (c *MSSQLClient) GetPermissions(ctx context.Context, dbName, userName strin
 			        dp.state_desc
 			 FROM sys.database_permissions dp
 			 JOIN sys.database_principals pr ON dp.grantee_principal_id = pr.principal_id
-			 WHERE pr.name = @p1 AND dp.state_desc IN ('GRANT', 'DENY')`, userName)
+			 WHERE pr.name = @p1 AND dp.state_desc IN ('GRANT', 'DENY')
+			 AND dp.permission_name != 'CONNECT'`, userName)
 		if err != nil {
 			return err
 		}
 		defer rows.Close()
 
 		for rows.Next() {
-			var perm, classDesc, targetName, state string
+			var perm, classDesc, state string
+			var targetName sql.NullString
 			if err := rows.Scan(&perm, &classDesc, &targetName, &state); err != nil {
 				return err
 			}
-			target := formatTarget(classDesc, targetName)
+			target := formatTarget(classDesc, targetName.String)
 			perms = append(perms, PermissionState{
 				Permission: perm,
 				Target:     target,
@@ -486,47 +488,49 @@ func (c *MSSQLClient) AGExists(ctx context.Context, agName string) (bool, error)
 }
 
 func (c *MSSQLClient) CreateAG(ctx context.Context, config AGConfig) error {
-	// Build CREATE AVAILABILITY GROUP statement
-	query := fmt.Sprintf("CREATE AVAILABILITY GROUP %s\nWITH (\n", QuoteName(config.Name))
-	query += fmt.Sprintf("    AUTOMATED_BACKUP_PREFERENCE = %s,\n", config.AutomatedBackupPreference)
+	// Build CREATE AVAILABILITY GROUP statement.
+	// T-SQL syntax: CREATE AVAILABILITY GROUP [name] WITH (...) FOR REPLICA ON ...
+	var b strings.Builder
+	fmt.Fprintf(&b, "CREATE AVAILABILITY GROUP %s\n", QuoteName(config.Name))
+
+	clusterType := config.ClusterType
+	if clusterType == "" {
+		clusterType = "EXTERNAL"
+	}
+	fmt.Fprintf(&b, "WITH (\n    CLUSTER_TYPE = %s,\n", clusterType)
+	fmt.Fprintf(&b, "    AUTOMATED_BACKUP_PREFERENCE = %s,\n", config.AutomatedBackupPreference)
 	if config.DBFailover {
-		query += "    DB_FAILOVER = ON\n"
+		b.WriteString("    DB_FAILOVER = ON\n")
 	} else {
-		query += "    DB_FAILOVER = OFF\n"
+		b.WriteString("    DB_FAILOVER = OFF\n")
 	}
-	query += ")\n"
+	b.WriteString(")\n")
 
-	// FOR DATABASE clause
-	if len(config.Databases) > 0 {
-		query += "FOR"
-		for i, db := range config.Databases {
-			if i > 0 {
-				query += ","
-			}
-			query += " DATABASE " + QuoteName(db)
-		}
-		query += "\n"
-	}
-
-	// REPLICA ON clause
-	query += "REPLICA ON\n"
+	// FOR REPLICA ON clause (required, must come before FOR DATABASE)
+	b.WriteString("FOR REPLICA ON\n")
 	for i, replica := range config.Replicas {
 		if i > 0 {
-			query += ",\n"
+			b.WriteString(",\n")
 		}
-		query += fmt.Sprintf("    N'%s' WITH (\n", strings.ReplaceAll(replica.ServerName, "'", "''"))
-		query += fmt.Sprintf("        ENDPOINT_URL = N'%s',\n", strings.ReplaceAll(replica.EndpointURL, "'", "''"))
-		query += fmt.Sprintf("        AVAILABILITY_MODE = %s,\n", replica.AvailabilityMode)
-		query += fmt.Sprintf("        FAILOVER_MODE = %s,\n", replica.FailoverMode)
-		query += fmt.Sprintf("        SEEDING_MODE = %s,\n", replica.SeedingMode)
-		query += fmt.Sprintf("        SECONDARY_ROLE (ALLOW_CONNECTIONS = %s)\n", replica.SecondaryRole)
-		query += "    )"
+		fmt.Fprintf(&b, "    N'%s' WITH (\n", strings.ReplaceAll(replica.ServerName, "'", "''"))
+		fmt.Fprintf(&b, "        ENDPOINT_URL = N'%s',\n", strings.ReplaceAll(replica.EndpointURL, "'", "''"))
+		fmt.Fprintf(&b, "        AVAILABILITY_MODE = %s,\n", replica.AvailabilityMode)
+		fmt.Fprintf(&b, "        FAILOVER_MODE = %s,\n", replica.FailoverMode)
+		fmt.Fprintf(&b, "        SEEDING_MODE = %s,\n", replica.SeedingMode)
+		fmt.Fprintf(&b, "        SECONDARY_ROLE (ALLOW_CONNECTIONS = %s)\n", replica.SecondaryRole)
+		b.WriteString("    )")
 	}
-	query += ";"
+	b.WriteString(";")
 
-	_, err := c.db.ExecContext(ctx, query)
-	if err != nil {
+	if _, err := c.db.ExecContext(ctx, b.String()); err != nil {
 		return fmt.Errorf("failed to create availability group %s: %w", config.Name, err)
+	}
+
+	// Add databases to AG after creation (separate ALTER statements)
+	for _, db := range config.Databases {
+		if err := c.AddDatabaseToAG(ctx, config.Name, db); err != nil {
+			return fmt.Errorf("failed to add database %s to AG: %w", db, err)
+		}
 	}
 	return nil
 }
@@ -618,8 +622,11 @@ func (c *MSSQLClient) RemoveDatabaseFromAG(ctx context.Context, agName, dbName s
 	return nil
 }
 
-func (c *MSSQLClient) JoinAG(ctx context.Context, agName string) error {
+func (c *MSSQLClient) JoinAG(ctx context.Context, agName string, clusterType string) error {
 	query := fmt.Sprintf("ALTER AVAILABILITY GROUP %s JOIN", QuoteName(agName))
+	if clusterType == "NONE" {
+		query += " WITH (CLUSTER_TYPE = NONE)"
+	}
 	_, err := c.db.ExecContext(ctx, query)
 	if err != nil {
 		return fmt.Errorf("failed to join AG %s: %w", agName, err)
@@ -816,20 +823,14 @@ func (c *MSSQLClient) SetDatabaseCompatibilityLevel(ctx context.Context, name st
 }
 
 func (c *MSSQLClient) GetDatabaseOption(ctx context.Context, name, option string) (bool, error) {
-	query := fmt.Sprintf("SELECT DATABASEPROPERTYEX(%s, %s)", QuoteString(name), QuoteString(option))
-	var val interface{}
+	// Use CAST to int to normalize the sql_variant return type of DATABASEPROPERTYEX.
+	query := fmt.Sprintf("SELECT CAST(DATABASEPROPERTYEX(%s, %s) AS int)", QuoteString(name), QuoteString(option))
+	var val sql.NullInt64
 	err := c.db.QueryRowContext(ctx, query).Scan(&val)
 	if err != nil {
 		return false, fmt.Errorf("failed to get database option %s for %s: %w", option, name, err)
 	}
-	// DATABASEPROPERTYEX returns various types; for boolean options it returns 1/0
-	switch v := val.(type) {
-	case int64:
-		return v == 1, nil
-	case string:
-		return strings.EqualFold(v, "TRUE") || v == "1", nil
-	}
-	return false, nil
+	return val.Valid && val.Int64 == 1, nil
 }
 
 func (c *MSSQLClient) SetDatabaseOption(ctx context.Context, name, option string, value bool) error {
@@ -837,7 +838,9 @@ func (c *MSSQLClient) SetDatabaseOption(ctx context.Context, name, option string
 	if value {
 		valStr = "ON"
 	}
-	query := fmt.Sprintf("ALTER DATABASE %s SET %s %s", QuoteName(name), option, valStr)
+	// Some options (e.g., READ_COMMITTED_SNAPSHOT) require exclusive access.
+	// WITH ROLLBACK IMMEDIATE terminates existing transactions to allow the change.
+	query := fmt.Sprintf("ALTER DATABASE %s SET %s %s WITH ROLLBACK IMMEDIATE", QuoteName(name), option, valStr)
 	_, err := c.db.ExecContext(ctx, query)
 	if err != nil {
 		return fmt.Errorf("failed to set database option %s for %s: %w", option, name, err)
@@ -847,12 +850,19 @@ func (c *MSSQLClient) SetDatabaseOption(ctx context.Context, name, option string
 
 // --- Point-in-Time Restore ---
 
-func (c *MSSQLClient) RestoreDatabasePIT(ctx context.Context, dbName, source, stopAt string) error {
-	query := fmt.Sprintf("RESTORE DATABASE %s FROM DISK = %s WITH REPLACE, STOPAT = %s",
-		QuoteName(dbName), QuoteString(source), QuoteString(stopAt))
-	_, err := c.db.ExecContext(ctx, query)
-	if err != nil {
-		return fmt.Errorf("failed to restore database %s to point-in-time %s: %w", dbName, stopAt, err)
+func (c *MSSQLClient) RestoreDatabasePIT(ctx context.Context, dbName, fullSource, logSource, stopAt string) error {
+	// Step 1: Restore full backup with NORECOVERY (prepares the database for log restore)
+	query1 := fmt.Sprintf("RESTORE DATABASE %s FROM DISK = %s WITH REPLACE, NORECOVERY",
+		QuoteName(dbName), QuoteString(fullSource))
+	if _, err := c.db.ExecContext(ctx, query1); err != nil {
+		return fmt.Errorf("failed to restore full backup for %s: %w", dbName, err)
+	}
+
+	// Step 2: Restore log backup with STOPAT and RECOVERY
+	query2 := fmt.Sprintf("RESTORE LOG %s FROM DISK = %s WITH RECOVERY, STOPAT = %s",
+		QuoteName(dbName), QuoteString(logSource), QuoteString(stopAt))
+	if _, err := c.db.ExecContext(ctx, query2); err != nil {
+		return fmt.Errorf("failed to restore log to point-in-time %s for %s: %w", stopAt, dbName, err)
 	}
 	return nil
 }

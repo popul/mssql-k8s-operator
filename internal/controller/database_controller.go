@@ -70,18 +70,25 @@ func (r *DatabaseReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 		}
 	}
 
-	// 3. Read the credentials Secret
-	username, password, err := getCredentialsFromSecret(ctx, r.Client, db.Namespace, db.Spec.Server.CredentialsSecret.Name)
+	// 3. Resolve server reference (supports sqlServerRef)
+	serverRef, err := resolveServerReference(ctx, r.Client, db.Namespace, db.Spec.Server)
+	if err != nil {
+		return r.setConditionAndReturn(ctx, &db, metav1.ConditionFalse, v1alpha1.ReasonConnectionFailed,
+			fmt.Sprintf("Failed to resolve server reference: %v", err))
+	}
+
+	// 4. Read the credentials Secret
+	username, password, err := getCredentialsFromSecret(ctx, r.Client, db.Namespace, serverRef.CredentialsSecret.Name)
 	if err != nil {
 		if apierrors.IsNotFound(err) {
 			return r.setConditionAndReturn(ctx, &db, metav1.ConditionFalse, v1alpha1.ReasonSecretNotFound,
-				fmt.Sprintf("Secret %q not found", db.Spec.Server.CredentialsSecret.Name))
+				fmt.Sprintf("Secret %q not found", serverRef.CredentialsSecret.Name))
 		}
 		return r.setConditionAndReturn(ctx, &db, metav1.ConditionFalse, v1alpha1.ReasonInvalidCredentialsSecret, err.Error())
 	}
 
-	// 4. Connect to SQL Server
-	sqlClient, err := connectToSQL(db.Spec.Server, username, password, r.SQLClientFactory)
+	// 5. Connect to SQL Server
+	sqlClient, err := connectToSQL(serverRef, username, password, r.SQLClientFactory)
 	if err != nil {
 		logger.Error(err, "failed to connect to SQL Server")
 		r.Recorder.Event(&db, corev1.EventTypeWarning, v1alpha1.ReasonConnectionFailed, err.Error())

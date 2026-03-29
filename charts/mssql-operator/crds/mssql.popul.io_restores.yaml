@@ -3,7 +3,7 @@ apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
   annotations:
-    controller-gen.kubebuilder.io/version: v0.17.2
+    controller-gen.kubebuilder.io/version: v0.19.0
   name: restores.mssql.popul.io
 spec:
   group: mssql.popul.io
@@ -57,6 +57,11 @@ spec:
                 description: DatabaseName is the target database name for the restore.
                 minLength: 1
                 type: string
+              logSource:
+                description: |-
+                  LogSource is the transaction log backup file path for point-in-time restore.
+                  Required when StopAt is specified.
+                type: string
               server:
                 description: Server defines the SQL Server connection details.
                 properties:
@@ -99,8 +104,8 @@ spec:
               stopAt:
                 description: |-
                   StopAt specifies a point-in-time for the restore (ISO 8601 format: "2024-01-15T14:30:00").
-                  Requires a Full backup + subsequent Log backups. The restore recovers the database
-                  to the state as of this timestamp.
+                  Requires Source (full backup) and LogSource (log backup). The controller restores
+                  the full backup with NORECOVERY, then restores the log with STOPAT and RECOVERY.
                 type: string
               withMove:
                 description: |-

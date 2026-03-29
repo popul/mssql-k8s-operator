@@ -104,8 +104,8 @@ func (r *RestoreReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	defer cancel()
 
 	var restoreErr error
-	if restore.Spec.StopAt != nil {
-		restoreErr = sqlClient.RestoreDatabasePIT(sqlCtx, restore.Spec.DatabaseName, restore.Spec.Source, *restore.Spec.StopAt)
+	if restore.Spec.StopAt != nil && restore.Spec.LogSource != nil {
+		restoreErr = sqlClient.RestoreDatabasePIT(sqlCtx, restore.Spec.DatabaseName, restore.Spec.Source, *restore.Spec.LogSource, *restore.Spec.StopAt)
 	} else if len(restore.Spec.WithMove) > 0 {
 		moves := make(map[string]string, len(restore.Spec.WithMove))
 		for _, m := range restore.Spec.WithMove {

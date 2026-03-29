@@ -60,7 +60,7 @@ type SQLClient interface {
 	GetAGStatus(ctx context.Context, agName string) (*AGStatus, error)
 	AddDatabaseToAG(ctx context.Context, agName, dbName string) error
 	RemoveDatabaseFromAG(ctx context.Context, agName, dbName string) error
-	JoinAG(ctx context.Context, agName string) error
+	JoinAG(ctx context.Context, agName string, clusterType string) error
 	GrantAGCreateDatabase(ctx context.Context, agName string) error
 	AddListenerToAG(ctx context.Context, agName string, listener AGListenerConfig) error
 	DropAG(ctx context.Context, agName string) error
@@ -83,7 +83,7 @@ type SQLClient interface {
 	SetDatabaseOption(ctx context.Context, name, option string, value bool) error
 
 	// Point-in-Time Restore
-	RestoreDatabasePIT(ctx context.Context, dbName, source, stopAt string) error
+	RestoreDatabasePIT(ctx context.Context, dbName, fullSource, logSource, stopAt string) error
 	RestoreDatabaseWithMove(ctx context.Context, dbName, source string, withMove map[string]string) error
 
 	// Connection
@@ -98,6 +98,7 @@ type AGConfig struct {
 	Databases                 []string
 	AutomatedBackupPreference string
 	DBFailover                bool
+	ClusterType               string // "WSFC", "EXTERNAL", "NONE"
 }
 
 // AGReplicaConfig contains the configuration for a single AG replica.

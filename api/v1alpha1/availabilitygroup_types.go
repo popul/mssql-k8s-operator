@@ -134,6 +134,29 @@ type AvailabilityGroupSpec struct {
 	// +optional
 	// +kubebuilder:default=true
 	DBFailover *bool `json:"dbFailover,omitempty"`
+
+	// ClusterType specifies the cluster manager: WSFC, External (Pacemaker), or None.
+	// None allows AG creation without a cluster manager (manual failover only).
+	// +optional
+	// +kubebuilder:validation:Enum=WSFC;External;None
+	// +kubebuilder:default=External
+	ClusterType *string `json:"clusterType,omitempty"`
+
+	// AutoFailover enables automatic failover when the primary becomes unreachable.
+	// The operator monitors all replicas and triggers failover to the best secondary.
+	// +optional
+	// +kubebuilder:default=false
+	AutoFailover *bool `json:"autoFailover,omitempty"`
+
+	// HealthCheckInterval is how often to check replica health when autoFailover is enabled.
+	// +optional
+	// +kubebuilder:default="10s"
+	HealthCheckInterval *string `json:"healthCheckInterval,omitempty"`
+
+	// FailoverCooldown is the minimum time between automatic failovers to prevent flapping.
+	// +optional
+	// +kubebuilder:default="60s"
+	FailoverCooldown *string `json:"failoverCooldown,omitempty"`
 }
 
 // AGReplicaStatus represents the observed state of a replica.
@@ -183,6 +206,14 @@ type AvailabilityGroupStatus struct {
 	// Databases shows the observed state of each database in the AG.
 	// +optional
 	Databases []AGDatabaseStatus `json:"databases,omitempty"`
+
+	// LastAutoFailoverTime records when the last automatic failover was triggered.
+	// +optional
+	LastAutoFailoverTime *metav1.Time `json:"lastAutoFailoverTime,omitempty"`
+
+	// AutoFailoverCount is the total number of automatic failovers executed.
+	// +optional
+	AutoFailoverCount int32 `json:"autoFailoverCount,omitempty"`
 }
 
 // +kubebuilder:object:root=true

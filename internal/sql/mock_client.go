@@ -858,7 +858,7 @@ func (m *MockClient) RemoveDatabaseFromAG(_ context.Context, agName, dbName stri
 	return nil
 }
 
-func (m *MockClient) JoinAG(_ context.Context, agName string) error {
+func (m *MockClient) JoinAG(_ context.Context, agName string, clusterType string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.track("JoinAG")
@@ -1198,7 +1198,7 @@ func (m *MockClient) SetDatabaseOption(_ context.Context, name, option string, v
 
 // --- Point-in-Time Restore ---
 
-func (m *MockClient) RestoreDatabasePIT(_ context.Context, dbName, source, stopAt string) error {
+func (m *MockClient) RestoreDatabasePIT(_ context.Context, dbName, fullSource, logSource, stopAt string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.track("RestoreDatabasePIT")

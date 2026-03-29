@@ -140,7 +140,9 @@ func (c *interfaceChecker) AddDatabaseToAG(ctx context.Context, agName, dbName s
 func (c *interfaceChecker) RemoveDatabaseFromAG(ctx context.Context, agName, dbName string) error {
 	return nil
 }
-func (c *interfaceChecker) JoinAG(ctx context.Context, agName string) error     { return nil }
+func (c *interfaceChecker) JoinAG(ctx context.Context, agName string, clusterType string) error {
+	return nil
+}
 func (c *interfaceChecker) GrantAGCreateDatabase(ctx context.Context, agName string) error {
 	return nil
 }
@@ -184,7 +186,7 @@ func (c *interfaceChecker) GetDatabaseOption(ctx context.Context, name, option s
 func (c *interfaceChecker) SetDatabaseOption(ctx context.Context, name, option string, value bool) error {
 	return nil
 }
-func (c *interfaceChecker) RestoreDatabasePIT(ctx context.Context, dbName, source, stopAt string) error {
+func (c *interfaceChecker) RestoreDatabasePIT(ctx context.Context, dbName, fullSource, logSource, stopAt string) error {
 	return nil
 }
 func (c *interfaceChecker) RestoreDatabaseWithMove(ctx context.Context, dbName, source string, withMove map[string]string) error {

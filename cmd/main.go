@@ -2,6 +2,7 @@ package main
 
 import (
 	"flag"
+	"fmt"
 	"os"
 	"time"
 
@@ -9,6 +10,7 @@ import (
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
@@ -186,11 +188,23 @@ func main() {
 
 	if enableWebhooks {
 		setupLog.Info("registering webhooks")
-		// Webhooks are registered via the types' Default/Validate methods.
-		// Requires cert-manager for TLS certificate provisioning.
-		// TODO: Register webhooks with mgr.GetWebhookServer() when
-		// webhook types implement admission.Handler interface.
-		setupLog.Info("webhooks enabled — ensure cert-manager is installed")
+		webhookTypes := []client.Object{
+			&v1alpha1.Database{},
+			&v1alpha1.Login{},
+			&v1alpha1.DatabaseUser{},
+			&v1alpha1.Backup{},
+			&v1alpha1.Restore{},
+			&v1alpha1.Schema{},
+			&v1alpha1.Permission{},
+			&v1alpha1.AvailabilityGroup{},
+		}
+		for _, obj := range webhookTypes {
+			if err := ctrl.NewWebhookManagedBy(mgr).For(obj).Complete(); err != nil {
+				setupLog.Error(err, "unable to create webhook", "type", fmt.Sprintf("%T", obj))
+				os.Exit(1)
+			}
+		}
+		setupLog.Info("webhooks registered", "count", len(webhookTypes))
 	}
 
 	if err := mgr.AddHealthzCheck("healthz", healthz.Ping); err != nil {

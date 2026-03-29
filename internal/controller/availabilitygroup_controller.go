@@ -3,13 +3,16 @@ package controller
 import (
 	"context"
 	"fmt"
+	"os"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	coordinationv1 "k8s.io/api/coordination/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/record"
 	"k8s.io/client-go/util/workqueue"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -39,6 +42,7 @@ type AvailabilityGroupReconciler struct {
 // +kubebuilder:rbac:groups=mssql.popul.io,resources=availabilitygroups,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=mssql.popul.io,resources=availabilitygroups/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=mssql.popul.io,resources=availabilitygroups/finalizers,verbs=update
+// +kubebuilder:rbac:groups=coordination.k8s.io,resources=leases,verbs=get;list;watch;create;update;patch
 
 func (r *AvailabilityGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	logger := log.FromContext(ctx)
@@ -68,7 +72,20 @@ func (r *AvailabilityGroupReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		}
 	}
 
-	// 3. Connect to the primary replica (first replica in the spec)
+	// 3. Auto-failover settings
+	autoFailoverEnabled := ag.Spec.AutoFailover != nil && *ag.Spec.AutoFailover
+	healthCheckInterval := 10 * time.Second
+	if ag.Spec.HealthCheckInterval != nil {
+		if d, err := time.ParseDuration(*ag.Spec.HealthCheckInterval); err == nil {
+			healthCheckInterval = d
+		}
+	}
+	requeue := requeueInterval
+	if autoFailoverEnabled {
+		requeue = healthCheckInterval
+	}
+
+	// 4. Connect to the primary replica (first replica in the spec)
 	primaryReplica := ag.Spec.Replicas[0]
 	username, password, err := getCredentialsFromSecret(ctx, r.Client, ag.Namespace, primaryReplica.Server.CredentialsSecret.Name)
 	if err != nil {
@@ -83,9 +100,33 @@ func (r *AvailabilityGroupReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	if err != nil {
 		logger.Error(err, "failed to connect to primary replica")
 		r.Recorder.Event(&ag, corev1.EventTypeWarning, v1alpha1.ReasonConnectionFailed, err.Error())
+
+		if autoFailoverEnabled {
+			result, err := r.handleAutoFailover(ctx, &ag, requeue)
+			if err != nil {
+				return ctrl.Result{RequeueAfter: requeueWithJitter(requeue)}, nil
+			}
+			return result, nil
+		}
 		return ctrl.Result{}, fmt.Errorf("failed to connect to primary replica: %w", err)
 	}
 	defer primaryClient.Close()
+
+	// Verify primary is actually reachable (sql.Open doesn't connect)
+	if autoFailoverEnabled {
+		pingCtx, pingCancel := context.WithTimeout(ctx, 5*time.Second)
+		if err := primaryClient.Ping(pingCtx); err != nil {
+			pingCancel()
+			primaryClient.Close()
+			logger.Info("primary replica unreachable (ping failed)", "error", err)
+			result, autoErr := r.handleAutoFailover(ctx, &ag, requeue)
+			if autoErr != nil {
+				return ctrl.Result{RequeueAfter: requeueWithJitter(requeue)}, nil
+			}
+			return result, nil
+		}
+		pingCancel()
+	}
 
 	// 4. Ensure HADR endpoint exists on primary
 	sqlCtx, cancel := sqlContext(ctx)
@@ -152,7 +193,7 @@ func (r *AvailabilityGroupReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	}
 
 	opmetrics.ReconcileTotal.WithLabelValues("AvailabilityGroup", "success").Inc()
-	return ctrl.Result{RequeueAfter: requeueWithJitter(requeueInterval)}, nil
+	return ctrl.Result{RequeueAfter: requeueWithJitter(requeue)}, nil
 }
 
 func (r *AvailabilityGroupReconciler) createAG(ctx context.Context, ag *v1alpha1.AvailabilityGroup, primaryClient sqlclient.SQLClient) error {
@@ -166,6 +207,9 @@ func (r *AvailabilityGroupReconciler) createAG(ctx context.Context, ag *v1alpha1
 	}
 	if ag.Spec.DBFailover != nil {
 		config.DBFailover = *ag.Spec.DBFailover
+	}
+	if ag.Spec.ClusterType != nil {
+		config.ClusterType = mapClusterType(*ag.Spec.ClusterType)
 	}
 
 	for _, db := range ag.Spec.Databases {
@@ -221,8 +265,12 @@ func (r *AvailabilityGroupReconciler) joinSecondaries(ctx context.Context, ag *v
 		}
 
 		// Join the AG
+		clusterType := "EXTERNAL"
+		if ag.Spec.ClusterType != nil {
+			clusterType = mapClusterType(*ag.Spec.ClusterType)
+		}
 		sqlCtx3, cancel3 := sqlContext(ctx)
-		err = secondaryClient.JoinAG(sqlCtx3, ag.Spec.AGName)
+		err = secondaryClient.JoinAG(sqlCtx3, ag.Spec.AGName, clusterType)
 		cancel3()
 		if err != nil {
 			secondaryClient.Close()
@@ -500,6 +548,169 @@ func mapSecondaryRole(role v1alpha1.SecondaryRole) string {
 		return "READ_ONLY"
 	default:
 		return "NO"
+	}
+}
+
+// handleAutoFailover attempts automatic failover when the primary is unreachable.
+func (r *AvailabilityGroupReconciler) handleAutoFailover(ctx context.Context, ag *v1alpha1.AvailabilityGroup, requeue time.Duration) (ctrl.Result, error) {
+	logger := log.FromContext(ctx)
+
+	// Check cooldown
+	cooldown := 60 * time.Second
+	if ag.Spec.FailoverCooldown != nil {
+		if d, err := time.ParseDuration(*ag.Spec.FailoverCooldown); err == nil {
+			cooldown = d
+		}
+	}
+	if ag.Status.LastAutoFailoverTime != nil {
+		elapsed := time.Since(ag.Status.LastAutoFailoverTime.Time)
+		if elapsed < cooldown {
+			logger.Info("auto-failover cooldown active", "remaining", cooldown-elapsed)
+			return ctrl.Result{RequeueAfter: cooldown - elapsed}, nil
+		}
+	}
+
+	// Acquire Lease to prevent split-brain
+	leaseName := fmt.Sprintf("ag-failover-%s", ag.Spec.AGName)
+	if !r.tryAcquireLease(ctx, ag.Namespace, leaseName) {
+		logger.Info("another operator instance holds the failover lease")
+		return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
+	}
+
+	// Try each secondary replica to find one we can connect to
+	for i := 1; i < len(ag.Spec.Replicas); i++ {
+		replica := ag.Spec.Replicas[i]
+		u, p, err := getCredentialsFromSecret(ctx, r.Client, ag.Namespace, replica.Server.CredentialsSecret.Name)
+		if err != nil {
+			continue
+		}
+
+		secondaryClient, err := connectToSQL(replica.Server, u, p, r.SQLClientFactory)
+		if err != nil {
+			continue
+		}
+
+		// Check if this replica is already PRIMARY (failover already happened externally)
+		sqlCtx, cancel := sqlContext(ctx)
+		role, err := secondaryClient.GetAGReplicaRole(sqlCtx, ag.Spec.AGName, replica.ServerName)
+		cancel()
+		if err != nil {
+			secondaryClient.Close()
+			continue
+		}
+
+		if role == "PRIMARY" {
+			// Already failed over externally, just update status
+			logger.Info("replica is already primary, updating status", "replica", replica.ServerName)
+			sqlCtx2, cancel2 := sqlContext(ctx)
+			agStatus, err := secondaryClient.GetAGStatus(sqlCtx2, ag.Spec.AGName)
+			cancel2()
+			secondaryClient.Close()
+			if err == nil {
+				_ = r.updateAGStatus(ctx, ag, agStatus)
+			}
+			return ctrl.Result{RequeueAfter: requeueWithJitter(requeue)}, nil
+		}
+
+		// Execute failover on this secondary
+		logger.Info("executing auto-failover", "target", replica.ServerName, "ag", ag.Spec.AGName)
+
+		sqlCtx3, cancel3 := sqlContext(ctx)
+		failoverErr := secondaryClient.ForceFailoverAG(sqlCtx3, ag.Spec.AGName)
+		cancel3()
+		secondaryClient.Close()
+
+		if failoverErr != nil {
+			logger.Error(failoverErr, "auto-failover failed", "target", replica.ServerName)
+			r.Recorder.Event(ag, corev1.EventTypeWarning, "AutoFailoverFailed",
+				fmt.Sprintf("Auto-failover to %s failed: %v", replica.ServerName, failoverErr))
+			continue
+		}
+
+		// Success
+		now := metav1.Now()
+		patch := client.MergeFrom(ag.DeepCopy())
+		ag.Status.PrimaryReplica = replica.ServerName
+		ag.Status.LastAutoFailoverTime = &now
+		ag.Status.AutoFailoverCount++
+		meta.SetStatusCondition(&ag.Status.Conditions, metav1.Condition{
+			Type:               v1alpha1.ConditionReady,
+			Status:             metav1.ConditionFalse,
+			Reason:             "AutoFailoverExecuted",
+			Message:            fmt.Sprintf("Auto-failover: new primary is %s", replica.ServerName),
+			ObservedGeneration: ag.Generation,
+		})
+		_ = r.Status().Patch(ctx, ag, patch)
+
+		r.Recorder.Event(ag, corev1.EventTypeNormal, "AutoFailoverCompleted",
+			fmt.Sprintf("AG %s auto-failover to %s completed", ag.Spec.AGName, replica.ServerName))
+		logger.Info("auto-failover completed", "newPrimary", replica.ServerName)
+
+		opmetrics.ReconcileTotal.WithLabelValues("AvailabilityGroup", "auto_failover").Inc()
+		return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
+	}
+
+	logger.Info("no reachable secondary for auto-failover")
+	r.Recorder.Event(ag, corev1.EventTypeWarning, "AutoFailoverNoCandidate",
+		"Primary unreachable and no secondary available for failover")
+	return ctrl.Result{}, fmt.Errorf("no failover candidates available")
+}
+
+// tryAcquireLease attempts to acquire a Kubernetes Lease for split-brain prevention.
+func (r *AvailabilityGroupReconciler) tryAcquireLease(ctx context.Context, namespace, leaseName string) bool {
+	now := metav1.NewMicroTime(time.Now())
+	leaseDuration := int32(30)
+	holder := fmt.Sprintf("%s/%d", os.Getenv("HOSTNAME"), os.Getpid())
+
+	lease := &coordinationv1.Lease{}
+	err := r.Get(ctx, types.NamespacedName{Name: leaseName, Namespace: namespace}, lease)
+
+	if apierrors.IsNotFound(err) {
+		lease = &coordinationv1.Lease{
+			ObjectMeta: metav1.ObjectMeta{Name: leaseName, Namespace: namespace},
+			Spec: coordinationv1.LeaseSpec{
+				HolderIdentity:       &holder,
+				LeaseDurationSeconds: &leaseDuration,
+				AcquireTime:          &now,
+				RenewTime:            &now,
+			},
+		}
+		return r.Create(ctx, lease) == nil
+	}
+	if err != nil {
+		return false
+	}
+
+	// We hold it → renew
+	if lease.Spec.HolderIdentity != nil && *lease.Spec.HolderIdentity == holder {
+		patch := client.MergeFrom(lease.DeepCopy())
+		lease.Spec.RenewTime = &now
+		return r.Patch(ctx, lease, patch) == nil
+	}
+
+	// Expired → take over
+	if lease.Spec.RenewTime != nil && lease.Spec.LeaseDurationSeconds != nil {
+		expiry := lease.Spec.RenewTime.Time.Add(time.Duration(*lease.Spec.LeaseDurationSeconds) * time.Second)
+		if time.Now().After(expiry) {
+			patch := client.MergeFrom(lease.DeepCopy())
+			lease.Spec.HolderIdentity = &holder
+			lease.Spec.AcquireTime = &now
+			lease.Spec.RenewTime = &now
+			return r.Patch(ctx, lease, patch) == nil
+		}
+	}
+
+	return false
+}
+
+func mapClusterType(ct string) string {
+	switch ct {
+	case "WSFC":
+		return "WSFC"
+	case "None":
+		return "NONE"
+	default:
+		return "EXTERNAL"
 	}
 }
 

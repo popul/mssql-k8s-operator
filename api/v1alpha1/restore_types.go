@@ -39,10 +39,15 @@ type RestoreSpec struct {
 	Source string `json:"source"`
 
 	// StopAt specifies a point-in-time for the restore (ISO 8601 format: "2024-01-15T14:30:00").
-	// Requires a Full backup + subsequent Log backups. The restore recovers the database
-	// to the state as of this timestamp.
+	// Requires Source (full backup) and LogSource (log backup). The controller restores
+	// the full backup with NORECOVERY, then restores the log with STOPAT and RECOVERY.
 	// +optional
 	StopAt *string `json:"stopAt,omitempty"`
+
+	// LogSource is the transaction log backup file path for point-in-time restore.
+	// Required when StopAt is specified.
+	// +optional
+	LogSource *string `json:"logSource,omitempty"`
 
 	// WithMove specifies file relocations for the restore (RESTORE ... WITH MOVE).
 	// Use this when restoring to a different server with different file paths.
