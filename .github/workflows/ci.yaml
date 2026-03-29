@@ -67,10 +67,11 @@ jobs:
         with:
           go-version-file: go.mod
 
+      - name: Install golangci-lint
+        run: go install github.com/golangci/golangci-lint/cmd/golangci-lint@v1.62.2
+
       - name: golangci-lint
-        uses: golangci/golangci-lint-action@v4
-        with:
-          version: v1.62.2
+        run: golangci-lint run ./...
 
   docker:
     runs-on: ubuntu-latest
