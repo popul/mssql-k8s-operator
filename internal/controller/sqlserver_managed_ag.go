@@ -126,6 +126,6 @@ func (r *SQLServerReconciler) reconcileManagedAG(ctx context.Context, srv *v1alp
 	return nil
 }
 
-func stringPtr(s string) *string       { return &s }
-func boolPtr(b bool) *bool             { return &b }
-func containsDot(s string) bool        { return strings.Contains(s, ".") }
+func stringPtr(s string) *string { return &s }
+func boolPtr(b bool) *bool       { return &b }
+func containsDot(s string) bool  { return strings.Contains(s, ".") }
