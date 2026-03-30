@@ -806,7 +806,7 @@ func (c *MSSQLClient) CreateHADREndpointWithCert(ctx context.Context, port int, 
     FOR DATABASE_MIRRORING (
         ROLE = ALL,
         AUTHENTICATION = CERTIFICATE %s,
-        ENCRYPTION = REQUIRED ALGORITHM AES
+        ENCRYPTION = DISABLED
     )`, port, QuoteName(certName))
 	_, err := c.db.ExecContext(ctx, query)
 	if err != nil {

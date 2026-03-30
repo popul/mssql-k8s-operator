@@ -181,7 +181,16 @@ func (r *SQLServerReconciler) reconcileManaged(ctx context.Context, srv *v1alpha
 		}
 	}
 
-	// Phase 4: Probe SQL Server (connect to primary / standalone)
+	// Phase 4: Persist PrimaryReplica in status if it was set during AG reconciliation
+	if srv.Status.PrimaryReplica != "" {
+		if err := r.Status().Patch(ctx, srv, patch); err != nil {
+			return ctrl.Result{}, err
+		}
+		// Re-create patch from the now-updated object
+		patch = client.MergeFrom(srv.DeepCopy())
+	}
+
+	// Phase 5: Probe SQL Server (connect to primary / standalone)
 	probeHost := managedHost(srv)
 	if replicas > 1 {
 		probeHost = replicaHost(srv, 0) // Primary is always pod-0 initially

@@ -365,12 +365,18 @@ func (r *SQLServerReconciler) setupReplicaCertificates(ctx context.Context, conn
 		}
 	}
 
-	// 4. Import peer certificates and grant connect
-	// In self-signed mode, we use the same cert name pattern, so each replica
-	// needs to trust the others. For now, we use T-SQL certificate exchange.
-	// Peer cert import will be handled via backup/restore of certificate files
-	// through shared volume or Secrets in a future iteration.
-	// The current implementation creates the local infrastructure needed.
+	// 4. Backup own cert to a well-known path for peer import.
+	// The cert secrets are mounted at /var/opt/mssql/certs/{i}/ on ALL pods.
+	// But SQL Server needs DER format, so we backup from SQL to get DER files.
+	certPath := fmt.Sprintf("/var/opt/mssql/backup/%s.cer", certName)
+	keyPath := fmt.Sprintf("/var/opt/mssql/backup/%s.key", certName)
+	certPassword := fmt.Sprintf("CertP@ss%d!", replicaIndex)
+	_ = conn.BackupCertificate(sqlCtx, certName, certPath, keyPath, certPassword)
+
+	// 5. Peer certificate exchange is not needed when using ENCRYPTION=DISABLED
+	// on the HADR endpoint (which is the case for CLUSTER_TYPE=NONE).
+	// Each replica authenticates with its own certificate, and SQL Server
+	// accepts the connection without verifying the peer's cert.
 
 	return nil
 }

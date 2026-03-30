@@ -3,15 +3,19 @@ package controller
 import (
 	"context"
 	"fmt"
+	"strings"
 
-	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	v1alpha1 "github.com/popul/mssql-k8s-operator/api/v1alpha1"
-	sqlclient "github.com/popul/mssql-k8s-operator/internal/sql"
 )
 
-// reconcileManagedAG creates the Availability Group and joins secondaries.
+// reconcileManagedAG ensures an AvailabilityGroup CRD exists for the managed SQL Server cluster.
+// The AG lifecycle (creation, join, failover) is fully delegated to the AvailabilityGroupReconciler.
 func (r *SQLServerReconciler) reconcileManagedAG(ctx context.Context, srv *v1alpha1.SQLServer) error {
 	logger := log.FromContext(ctx)
 	inst := srv.Spec.Instance
@@ -34,133 +38,94 @@ func (r *SQLServerReconciler) reconcileManagedAG(ctx context.Context, srv *v1alp
 		agName = *ag.AGName
 	}
 
-	// Read credentials
-	secretNS := srv.Namespace
-	if srv.Spec.CredentialsSecret != nil && srv.Spec.CredentialsSecret.Namespace != nil {
-		secretNS = *srv.Spec.CredentialsSecret.Namespace
-	}
-	if srv.Spec.CredentialsSecret == nil {
-		return fmt.Errorf("credentialsSecret is required")
-	}
+	agCRName := srv.Name + "-ag"
 
-	username, password, err := getCredentialsFromSecret(ctx, r.Client, secretNS, srv.Spec.CredentialsSecret.Name)
-	if err != nil {
-		return fmt.Errorf("failed to read credentials: %w", err)
-	}
-
-	port := int32(sqlPort)
-	if srv.Spec.Port != nil {
-		port = *srv.Spec.Port
-	}
-	tlsEnabled := srv.Spec.TLS != nil && *srv.Spec.TLS
-
-	// Connect to primary (pod-0)
-	primaryHost := replicaHost(srv, 0)
-	primaryConn, err := r.SQLClientFactory(primaryHost, int(port), username, password, tlsEnabled)
-	if err != nil {
-		return fmt.Errorf("failed to connect to primary (%s): %w", primaryHost, err)
-	}
-	defer primaryConn.Close()
-
-	sqlCtx, cancel := sqlContext(ctx)
-	defer cancel()
-
-	// Check if AG already exists
-	agExists, err := primaryConn.AGExists(sqlCtx, agName)
-	if err != nil {
-		return fmt.Errorf("failed to check AG existence: %w", err)
-	}
-
-	if !agExists {
-		logger.Info("creating availability group", "agName", agName)
-
-		availabilityMode := "SYNCHRONOUS_COMMIT"
-		if ag.AvailabilityMode != nil && *ag.AvailabilityMode == "AsynchronousCommit" {
-			availabilityMode = "ASYNCHRONOUS_COMMIT"
-		}
-
-		clusterType := "NONE"
-
-		agReplicas := make([]sqlclient.AGReplicaConfig, replicas)
-		for i := int32(0); i < replicas; i++ {
-			host := replicaHost(srv, int(i))
-			agReplicas[i] = sqlclient.AGReplicaConfig{
-				ServerName:       host,
-				EndpointURL:      fmt.Sprintf("TCP://%s:%d", host, hadrEndpointPort),
-				AvailabilityMode: availabilityMode,
-				FailoverMode:     "MANUAL", // Required for CLUSTER_TYPE=NONE
-				SeedingMode:      "AUTOMATIC",
-				SecondaryRole:    "ALL",
+	// Check if the AG CRD already exists
+	var existingAG v1alpha1.AvailabilityGroup
+	err := r.Get(ctx, types.NamespacedName{Name: agCRName, Namespace: srv.Namespace}, &existingAG)
+	if err == nil {
+		// AG CRD already exists — read its status to update SQLServer status.
+		// PrimaryReplica from AG status is the pod name (@@SERVERNAME).
+		// Map it to FQDN for the operator to connect.
+		if existingAG.Status.PrimaryReplica != "" {
+			srv.Status.PrimaryReplica = existingAG.Status.PrimaryReplica
+			// If it's a pod name (no dots), build the FQDN
+			if !containsDot(existingAG.Status.PrimaryReplica) {
+				srv.Status.PrimaryReplica = fmt.Sprintf("%s.%s-headless.%s.svc.cluster.local",
+					existingAG.Status.PrimaryReplica, srv.Name, srv.Namespace)
 			}
 		}
+		return nil
+	}
+	if !apierrors.IsNotFound(err) {
+		return fmt.Errorf("failed to check AG CRD: %w", err)
+	}
 
-		config := &sqlclient.AGConfig{
-			Name:                      agName,
+	// Build the AvailabilityGroup CR
+	logger.Info("creating AvailabilityGroup CRD for managed cluster", "agName", agName, "replicas", replicas)
+
+	credsSecretName := ""
+	if srv.Spec.CredentialsSecret != nil {
+		credsSecretName = srv.Spec.CredentialsSecret.Name
+	}
+
+	availabilityMode := v1alpha1.AvailabilityModeSynchronous
+	if ag.AvailabilityMode != nil && *ag.AvailabilityMode == "AsynchronousCommit" {
+		availabilityMode = v1alpha1.AvailabilityModeAsynchronous
+	}
+
+	agReplicas := make([]v1alpha1.AGReplicaSpec, replicas)
+	for i := int32(0); i < replicas; i++ {
+		host := replicaHost(srv, int(i))
+		podName := fmt.Sprintf("%s-%d", srv.Name, i)
+		agReplicas[i] = v1alpha1.AGReplicaSpec{
+			ServerName:       podName,
+			EndpointURL:      fmt.Sprintf("TCP://%s:%d", host, hadrEndpointPort),
+			AvailabilityMode: availabilityMode,
+			FailoverMode:     v1alpha1.FailoverModeManual,
+			SeedingMode:      v1alpha1.SeedingModeAutomatic,
+			SecondaryRole:    v1alpha1.SecondaryRoleAllowAll,
+			Server: v1alpha1.ServerReference{
+				Host:              host,
+				Port:              srv.Spec.Port,
+				CredentialsSecret: v1alpha1.SecretReference{Name: credsSecretName},
+			},
+		}
+	}
+
+	clusterType := "None"
+	agCR := &v1alpha1.AvailabilityGroup{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      agCRName,
+			Namespace: srv.Namespace,
+		},
+		Spec: v1alpha1.AvailabilityGroupSpec{
+			AGName:                    agName,
 			Replicas:                  agReplicas,
-			ClusterType:               clusterType,
-			AutomatedBackupPreference: "SECONDARY",
-			DBFailover:                false,
-		}
-
-		if err := primaryConn.CreateAG(sqlCtx, config); err != nil {
-			return fmt.Errorf("failed to create availability group: %w", err)
-		}
-		r.Recorder.Event(srv, corev1.EventTypeNormal, "AGCreated",
-			fmt.Sprintf("Availability Group %s created with %d replicas", agName, replicas))
+			AutomatedBackupPreference: stringPtr("Secondary"),
+			DBFailover:                boolPtr(false),
+			ClusterType:               &clusterType,
+			AutoFailover:              ag.AutoFailover,
+			HealthCheckInterval:       ag.HealthCheckInterval,
+			FailoverCooldown:          ag.FailoverCooldown,
+		},
 	}
 
-	// Join secondaries
-	for i := int32(1); i < replicas; i++ {
-		secondaryHost := replicaHost(srv, int(i))
-		secondaryConn, err := r.SQLClientFactory(secondaryHost, int(port), username, password, tlsEnabled)
-		if err != nil {
-			logger.Error(err, "failed to connect to secondary", "replica", i, "host", secondaryHost)
-			continue
-		}
-
-		joinCtx, joinCancel := sqlContext(ctx)
-
-		// Check if already part of an AG
-		role, err := secondaryConn.GetAGReplicaRole(joinCtx, agName, secondaryHost)
-		if err != nil || role == "" {
-			logger.Info("joining secondary to AG", "replica", i, "agName", agName)
-			if err := secondaryConn.JoinAG(joinCtx, agName, "NONE"); err != nil {
-				logger.Error(err, "failed to join secondary to AG", "replica", i)
-				joinCancel()
-				secondaryConn.Close()
-				continue
-			}
-			// Grant AG create database for automatic seeding
-			if err := secondaryConn.GrantAGCreateDatabase(joinCtx, agName); err != nil {
-				logger.Error(err, "failed to grant AG create database", "replica", i)
-			}
-			r.Recorder.Event(srv, corev1.EventTypeNormal, "ReplicaJoined",
-				fmt.Sprintf("Replica %s joined AG %s", secondaryHost, agName))
-		}
-
-		joinCancel()
-		secondaryConn.Close()
+	// Set owner reference so AG CRD is deleted when SQLServer is deleted
+	if err := controllerutil.SetControllerReference(srv, agCR, r.Scheme); err != nil {
+		return fmt.Errorf("failed to set owner reference on AG CRD: %w", err)
 	}
 
-	// Add databases to AG
-	if len(ag.Databases) > 0 {
-		dbCtx, dbCancel := sqlContext(ctx)
-		defer dbCancel()
-
-		for _, db := range ag.Databases {
-			if err := primaryConn.AddDatabaseToAG(dbCtx, agName, db); err != nil {
-				logger.Error(err, "failed to add database to AG", "database", db, "ag", agName)
-			}
-		}
+	if err := r.Create(ctx, agCR); err != nil {
+		return fmt.Errorf("failed to create AvailabilityGroup CRD: %w", err)
 	}
 
-	// Update status with AG info
-	agStatus, err := primaryConn.GetAGStatus(sqlCtx, agName)
-	if err != nil {
-		logger.Error(err, "failed to get AG status")
-	} else if agStatus != nil {
-		srv.Status.PrimaryReplica = agStatus.PrimaryReplica
-	}
-
+	r.Recorder.Event(srv, "Normal", "AGCRDCreated",
+		fmt.Sprintf("AvailabilityGroup CRD %s created for managed cluster", agCRName))
+	logger.Info("AvailabilityGroup CRD created", "name", agCRName, "agName", agName)
 	return nil
 }
+
+func stringPtr(s string) *string       { return &s }
+func boolPtr(b bool) *bool             { return &b }
+func containsDot(s string) bool        { return strings.Contains(s, ".") }

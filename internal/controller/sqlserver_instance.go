@@ -206,10 +206,34 @@ func (r *SQLServerReconciler) desiredStatefulSet(srv *v1alpha1.SQLServer) *appsv
 		},
 	}
 
+	var volumes []corev1.Volume
 	if replicas > 1 {
 		container.Ports = append(container.Ports, corev1.ContainerPort{
 			Name: "hadr", ContainerPort: hadrEndpointPort,
 		})
+
+		// Mount all replica cert secrets so each pod can import peer certificates.
+		// Each secret is mounted at /var/opt/mssql/certs/{i}/ with tls.crt, tls.key, password.
+		for i := int32(0); i < replicas; i++ {
+			secretName := fmt.Sprintf("%s-cert-%d", srv.Name, i)
+			volumeName := fmt.Sprintf("cert-%d", i)
+			mountPath := fmt.Sprintf("/var/opt/mssql/certs/%d", i)
+
+			volumes = append(volumes, corev1.Volume{
+				Name: volumeName,
+				VolumeSource: corev1.VolumeSource{
+					Secret: &corev1.SecretVolumeSource{
+						SecretName: secretName,
+						Optional:   boolPtr(true), // Secret may not exist yet on first reconciliation
+					},
+				},
+			})
+			container.VolumeMounts = append(container.VolumeMounts, corev1.VolumeMount{
+				Name:      volumeName,
+				MountPath: mountPath,
+				ReadOnly:  true,
+			})
+		}
 	}
 
 	if inst.Resources != nil {
@@ -249,6 +273,7 @@ func (r *SQLServerReconciler) desiredStatefulSet(srv *v1alpha1.SQLServer) *appsv
 				ObjectMeta: metav1.ObjectMeta{Labels: labels},
 				Spec: corev1.PodSpec{
 					Containers:                []corev1.Container{container},
+					Volumes:                   volumes,
 					NodeSelector:              inst.NodeSelector,
 					Tolerations:               inst.Tolerations,
 					Affinity:                  inst.Affinity,
