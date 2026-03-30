@@ -52,44 +52,7 @@ spec:
 
 ### HA cluster (3 replicas with Availability Group)
 
-```yaml
-apiVersion: mssql.popul.io/v1alpha1
-kind: SQLServer
-metadata:
-  name: mssql
-  namespace: mssql
-spec:
-  instance:
-    acceptEULA: true
-    edition: Enterprise
-    saPasswordSecret:
-      name: mssql-sa-password
-    replicas: 3
-    storageSize: 50Gi
-    resources:
-      requests:
-        memory: 4Gi
-        cpu: "1"
-      limits:
-        memory: 8Gi
-    nodeSelector:
-      disktype: ssd
-    topologySpreadConstraints:
-      - maxSkew: 1
-        topologyKey: topology.kubernetes.io/zone
-        whenUnsatisfiable: ScheduleAnyway
-        labelSelector:
-          matchLabels:
-            app.kubernetes.io/instance: mssql
-    certificates:
-      mode: SelfSigned
-    availabilityGroup:
-      agName: myag
-      availabilityMode: SynchronousCommit
-      autoFailover: true
-```
-
-> For HA setup details (failover testing, monitoring, troubleshooting), see [High Availability](high-availability.md).
+For multi-replica deployments with Availability Groups, see the dedicated [High Availability guide](high-availability.md).
 
 ## Step 3: Apply and verify
 
