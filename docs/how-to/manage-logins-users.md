@@ -2,7 +2,9 @@
 
 ## Create a login
 
-First, create a Secret for the login password:
+First, ensure you have a `SQLServer` CR deployed ([Deploy SQL Server](deploy-sql-server.md)).
+
+Create a Secret for the login password:
 
 ```bash
 kubectl create secret generic myapp-login-password \
@@ -18,13 +20,19 @@ metadata:
   name: myapp-login
 spec:
   server:
-    host: mssql.database.svc.cluster.local
-    credentialsSecret:
-      name: mssql-sa-credentials
+    sqlServerRef: mssql          # references your SQLServer CR
   loginName: myapp_user
   passwordSecret:
     name: myapp-login-password
 ```
+
+> You can also specify inline connection details instead of `sqlServerRef`:
+> ```yaml
+> server:
+>   host: mssql.database.svc.cluster.local
+>   credentialsSecret:
+>     name: mssql-sa-credentials
+> ```
 
 ## Add server roles
 
@@ -67,9 +75,7 @@ metadata:
   name: myapp-dbuser
 spec:
   server:
-    host: mssql.database.svc.cluster.local
-    credentialsSecret:
-      name: mssql-sa-credentials
+    sqlServerRef: mssql
   databaseName: myapp
   userName: myapp_user
   loginRef:

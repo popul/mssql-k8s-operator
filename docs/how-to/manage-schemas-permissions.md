@@ -2,6 +2,8 @@
 
 ## Create a schema
 
+First, ensure you have a `SQLServer` CR deployed ([Deploy SQL Server](deploy-sql-server.md)).
+
 ```yaml
 apiVersion: mssql.popul.io/v1alpha1
 kind: Schema
@@ -9,18 +11,24 @@ metadata:
   name: app-schema
 spec:
   server:
-    host: mssql.database.svc.cluster.local
-    credentialsSecret:
-      name: mssql-sa-credentials
+    sqlServerRef: mssql          # references your SQLServer CR
   databaseName: myapp
   schemaName: app
-  owner: myapp_user           # optional
+  owner: myapp_user              # optional
 ```
 
 ```bash
 kubectl apply -f schema.yaml
 kubectl get msschema
 ```
+
+> You can also specify inline connection details instead of `sqlServerRef`:
+> ```yaml
+> server:
+>   host: mssql.database.svc.cluster.local
+>   credentialsSecret:
+>     name: mssql-sa-credentials
+> ```
 
 ## Change schema owner
 
@@ -52,9 +60,7 @@ metadata:
   name: app-permissions
 spec:
   server:
-    host: mssql.database.svc.cluster.local
-    credentialsSecret:
-      name: mssql-sa-credentials
+    sqlServerRef: mssql
   databaseName: myapp
   userName: myapp_user
   grants:
@@ -121,9 +127,7 @@ metadata:
   name: app-schema
 spec:
   server:
-    host: mssql.database.svc.cluster.local
-    credentialsSecret:
-      name: mssql-sa-credentials
+    sqlServerRef: mssql
   databaseName: myapp
   schemaName: app
   owner: myapp_user
@@ -135,9 +139,7 @@ metadata:
   name: app-permissions
 spec:
   server:
-    host: mssql.database.svc.cluster.local
-    credentialsSecret:
-      name: mssql-sa-credentials
+    sqlServerRef: mssql
   databaseName: myapp
   userName: myapp_user
   grants:

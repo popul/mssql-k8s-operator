@@ -1,15 +1,23 @@
 # Change SQL Server version or edition
 
-The SQL Server version and edition are controlled by the **Docker image** and the `MSSQL_PID` environment variable in the StatefulSet (or Deployment) that runs SQL Server.
+## With the SQLServer CR (managed mode)
 
-## Change the version
+### Change the version
 
-Update the `image` field in your StatefulSet or Deployment:
+Update the `image` field in your `SQLServer` CR:
 
 ```yaml
-containers:
-  - name: mssql
-    image: mcr.microsoft.com/mssql/server:2022-CU16-ubuntu-22.04  # specific CU
+apiVersion: mssql.popul.io/v1alpha1
+kind: SQLServer
+metadata:
+  name: mssql
+spec:
+  credentialsSecret:
+    name: sa-credentials
+  instance:
+    acceptEULA: true
+    image: mcr.microsoft.com/mssql/server:2022-CU16-ubuntu-22.04
+    # ...
 ```
 
 Common tags:
@@ -20,27 +28,18 @@ Common tags:
 | `2019-latest` | SQL Server 2019, latest cumulative update |
 | `2022-CU16-ubuntu-22.04` | SQL Server 2022, CU16 specifically |
 
-## Change the edition
+The operator performs a rolling update of the StatefulSet. If you have an Availability Group with `autoFailover: true`, the primary switchover is handled automatically.
 
-Add or update `MSSQL_PID` in the environment variables:
+### Change the edition
+
+Update the `edition` field:
 
 ```yaml
-containers:
-  - name: mssql
-    image: mcr.microsoft.com/mssql/server:2022-latest
-    env:
-      - name: MSSQL_PID
-        value: "Enterprise"    # or Developer, Express, Standard, EnterpriseCore
-      - name: ACCEPT_EULA
-        value: "Y"
-      - name: MSSQL_SA_PASSWORD
-        valueFrom:
-          secretKeyRef:
-            name: mssql-sa-password
-            key: MSSQL_SA_PASSWORD
+instance:
+  edition: Enterprise    # Developer, Express, Standard, Enterprise, EnterpriseCore
 ```
 
-| MSSQL_PID | Licence | AG support | Limites |
+| Edition | Licence | AG support | Limites |
 |---|---|---|---|
 | `Developer` | Gratuit (non-prod) | Oui | Pas de production |
 | `Express` | Gratuit | Non | 10 Go par base, 1 Go RAM |
@@ -48,9 +47,49 @@ containers:
 | `Enterprise` | Payant | Complet | Aucune |
 | `EnterpriseCore` | Payant (par core) | Complet | Aucune |
 
-Par defaut (sans `MSSQL_PID`), l'image utilise **Developer Edition**.
+Par defaut, l'edition est **Developer**.
 
-## Apply the change
+> **Note**: Express edition ne supporte pas les Availability Groups. Le webhook de validation bloque la creation d'un `SQLServer` CR avec `edition: Express` et `replicas > 1`.
+
+### Apply and verify
+
+```bash
+kubectl apply -f sqlserver.yaml
+
+# Watch the rolling update
+kubectl get pods -n mssql -w
+
+# Check the version in the status
+kubectl get sqlsrv mssql -n mssql -o jsonpath='{.status.serverVersion} {.status.edition}'
+```
+
+## With a manual deployment
+
+If you manage SQL Server yourself (see [Manual deployment](manual-sql-server-deployment.md)), the version and edition are controlled by the Docker image and the `MSSQL_PID` environment variable.
+
+### Change the version
+
+Update the `image` in your StatefulSet or Deployment:
+
+```yaml
+containers:
+  - name: mssql
+    image: mcr.microsoft.com/mssql/server:2022-CU16-ubuntu-22.04
+```
+
+### Change the edition
+
+Set `MSSQL_PID` in the environment variables:
+
+```yaml
+containers:
+  - name: mssql
+    env:
+      - name: MSSQL_PID
+        value: "Enterprise"
+```
+
+Apply and restart:
 
 ```bash
 kubectl apply -f sql-server.yaml
@@ -58,20 +97,18 @@ kubectl rollout restart statefulset/sql -n mssql
 kubectl rollout status statefulset/sql -n mssql --timeout=120s
 ```
 
-If you use an Availability Group with `autoFailover: true`, the operator handles the primary switchover automatically during the rolling update.
-
 ## Verify the version and edition
 
 Via `sqlcmd`:
 
 ```bash
-kubectl exec sql-0 -n mssql -- /opt/mssql-tools18/bin/sqlcmd \
+kubectl exec mssql-0 -n mssql -- /opt/mssql-tools18/bin/sqlcmd \
   -S localhost -U sa -P "$SA_PASSWORD" \
   -Q "SELECT SERVERPROPERTY('ProductVersion'), SERVERPROPERTY('Edition')" -C -No
 ```
 
-Or via the `SQLServer` CRD if you have one:
+Or via the `SQLServer` CR status:
 
 ```bash
-kubectl get sqlserver -n mssql -o jsonpath='{.items[0].status.serverVersion} {.items[0].status.edition}'
+kubectl get sqlsrv mssql -n mssql -o jsonpath='{.status.serverVersion} {.status.edition}'
 ```
