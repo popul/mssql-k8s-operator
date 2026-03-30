@@ -1,0 +1,111 @@
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: mssql-operator-manager
+rules:
+- apiGroups:
+  - ""
+  resources:
+  - events
+  verbs:
+  - create
+  - patch
+- apiGroups:
+  - ""
+  resources:
+  - persistentvolumeclaims
+  - secrets
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - ""
+  resources:
+  - services
+  verbs:
+  - create
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - apps
+  resources:
+  - statefulsets
+  verbs:
+  - create
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - coordination.k8s.io
+  resources:
+  - leases
+  verbs:
+  - create
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - mssql.popul.io
+  resources:
+  - agfailovers
+  - availabilitygroups
+  - backups
+  - databases
+  - databaseusers
+  - logins
+  - permissions
+  - restores
+  - scheduledbackups
+  - schemas
+  - sqlservers
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - mssql.popul.io
+  resources:
+  - agfailovers/finalizers
+  - availabilitygroups/finalizers
+  - backups/finalizers
+  - databases/finalizers
+  - databaseusers/finalizers
+  - logins/finalizers
+  - permissions/finalizers
+  - restores/finalizers
+  - scheduledbackups/finalizers
+  - schemas/finalizers
+  - sqlservers/finalizers
+  verbs:
+  - update
+- apiGroups:
+  - mssql.popul.io
+  resources:
+  - agfailovers/status
+  - availabilitygroups/status
+  - backups/status
+  - databases/status
+  - databaseusers/status
+  - logins/status
+  - permissions/status
+  - restores/status
+  - scheduledbackups/status
+  - schemas/status
+  - sqlservers/status
+  verbs:
+  - get
+  - patch
+  - update

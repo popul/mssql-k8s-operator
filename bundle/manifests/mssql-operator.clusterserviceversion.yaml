@@ -1,0 +1,243 @@
+apiVersion: operators.coreos.com/v1alpha1
+kind: ClusterServiceVersion
+metadata:
+  name: mssql-operator.v0.1.0
+  namespace: placeholder
+  annotations:
+    alm-examples: |-
+      [
+        {
+          "apiVersion": "mssql.popul.io/v1alpha1",
+          "kind": "SQLServer",
+          "metadata": {"name": "production-sql"},
+          "spec": {
+            "host": "mssql.database.svc",
+            "port": 1433,
+            "credentialsSecret": {"name": "mssql-credentials"}
+          }
+        },
+        {
+          "apiVersion": "mssql.popul.io/v1alpha1",
+          "kind": "Database",
+          "metadata": {"name": "myapp-db"},
+          "spec": {
+            "server": {"sqlServerRef": "production-sql"},
+            "databaseName": "myapp",
+            "recoveryModel": "Full"
+          }
+        },
+        {
+          "apiVersion": "mssql.popul.io/v1alpha1",
+          "kind": "Login",
+          "metadata": {"name": "myapp-login"},
+          "spec": {
+            "server": {"sqlServerRef": "production-sql"},
+            "loginName": "myapp_user",
+            "passwordSecret": {"name": "myapp-password"}
+          }
+        },
+        {
+          "apiVersion": "mssql.popul.io/v1alpha1",
+          "kind": "ScheduledBackup",
+          "metadata": {"name": "nightly-full"},
+          "spec": {
+            "server": {"sqlServerRef": "production-sql"},
+            "databaseName": "myapp",
+            "schedule": "0 2 * * *",
+            "type": "Full",
+            "destinationTemplate": "/backups/{{.DatabaseName}}-{{.Timestamp}}.bak",
+            "retention": {"maxCount": 7}
+          }
+        }
+      ]
+    capabilities: Deep Insights
+    categories: Database
+    description: Declarative management of SQL Server databases, logins, users, schemas, permissions, backups, and Always On Availability Groups on Kubernetes.
+    containerImage: ghcr.io/popul/mssql-k8s-operator:0.1.0
+    repository: https://github.com/popul/mssql-k8s-operator
+    support: Community
+    createdAt: "2024-01-01T00:00:00Z"
+spec:
+  displayName: MSSQL Kubernetes Operator
+  description: |
+    ## MSSQL Kubernetes Operator
+
+    Manage Microsoft SQL Server objects declaratively via Kubernetes Custom Resources.
+
+    ### Features
+    - **SQLServer**: Shared connection reference with health probing
+    - **Database**: Create/manage databases with recovery model, compatibility level, and options
+    - **Login**: SQL Server logins with password rotation
+    - **DatabaseUser**: Database users mapped to logins with role assignments
+    - **Schema**: Database schemas with owner management
+    - **Permission**: Declarative GRANT/DENY/REVOKE management
+    - **Backup/Restore**: One-shot backup and restore operations with PIT support
+    - **ScheduledBackup**: Cron-based backup scheduling with retention policies
+    - **AvailabilityGroup**: Always On AG lifecycle management
+    - **AGFailover**: Safe and forced AG failover operations
+
+    ### Authentication
+    - SQL Server Authentication (username/password)
+    - Azure AD / Entra ID Service Principal
+    - Azure Managed Identity
+
+    ### Prerequisites
+    - A running SQL Server instance (2016+)
+    - Kubernetes 1.25+
+  maturity: alpha
+  version: 0.1.0
+  replaces: ""
+  minKubeVersion: "1.25.0"
+  keywords:
+    - sql-server
+    - mssql
+    - database
+    - operator
+    - backup
+    - availability-group
+  maintainers:
+    - name: Community
+      email: community@example.com
+  provider:
+    name: Community
+  labels:
+    operatorframework.io/os.linux: supported
+  selector:
+    matchLabels:
+      name: mssql-operator
+  links:
+    - name: Documentation
+      url: https://github.com/popul/mssql-k8s-operator
+    - name: Source Code
+      url: https://github.com/popul/mssql-k8s-operator
+  installModes:
+    - type: OwnNamespace
+      supported: true
+    - type: SingleNamespace
+      supported: true
+    - type: MultiNamespace
+      supported: false
+    - type: AllNamespaces
+      supported: true
+  install:
+    strategy: deployment
+    spec:
+      permissions:
+        - serviceAccountName: mssql-operator
+          rules:
+            - apiGroups: [""]
+              resources: [configmaps, events]
+              verbs: [create, delete, get, list, patch, update, watch]
+            - apiGroups: ["coordination.k8s.io"]
+              resources: [leases]
+              verbs: [create, delete, get, list, patch, update, watch]
+      clusterPermissions:
+        - serviceAccountName: mssql-operator
+          rules:
+            - apiGroups: ["mssql.popul.io"]
+              resources: ["*"]
+              verbs: [create, delete, get, list, patch, update, watch]
+            - apiGroups: [""]
+              resources: [secrets]
+              verbs: [get, list, watch]
+            - apiGroups: [""]
+              resources: [events]
+              verbs: [create, patch]
+      deployments:
+        - name: mssql-operator
+          spec:
+            replicas: 1
+            selector:
+              matchLabels:
+                name: mssql-operator
+            template:
+              metadata:
+                labels:
+                  name: mssql-operator
+              spec:
+                serviceAccountName: mssql-operator
+                containers:
+                  - name: manager
+                    image: ghcr.io/popul/mssql-k8s-operator:0.1.0
+                    args:
+                      - --leader-elect
+                      - --metrics-bind-address=:8080
+                      - --health-probe-bind-address=:8081
+                    ports:
+                      - containerPort: 8080
+                        name: metrics
+                    livenessProbe:
+                      httpGet:
+                        path: /healthz
+                        port: 8081
+                    readinessProbe:
+                      httpGet:
+                        path: /readyz
+                        port: 8081
+                    resources:
+                      limits:
+                        cpu: 500m
+                        memory: 256Mi
+                      requests:
+                        cpu: 10m
+                        memory: 64Mi
+                    securityContext:
+                      allowPrivilegeEscalation: false
+                      readOnlyRootFilesystem: true
+  customresourcedefinitions:
+    owned:
+      - name: sqlservers.mssql.popul.io
+        version: v1alpha1
+        kind: SQLServer
+        displayName: SQL Server
+        description: Shared SQL Server connection reference
+      - name: databases.mssql.popul.io
+        version: v1alpha1
+        kind: Database
+        displayName: Database
+        description: SQL Server database
+      - name: logins.mssql.popul.io
+        version: v1alpha1
+        kind: Login
+        displayName: Login
+        description: SQL Server login
+      - name: databaseusers.mssql.popul.io
+        version: v1alpha1
+        kind: DatabaseUser
+        displayName: Database User
+        description: SQL Server database user
+      - name: schemas.mssql.popul.io
+        version: v1alpha1
+        kind: Schema
+        displayName: Schema
+        description: SQL Server database schema
+      - name: permissions.mssql.popul.io
+        version: v1alpha1
+        kind: Permission
+        displayName: Permission
+        description: SQL Server permission grants and denies
+      - name: backups.mssql.popul.io
+        version: v1alpha1
+        kind: Backup
+        displayName: Backup
+        description: One-shot SQL Server backup
+      - name: restores.mssql.popul.io
+        version: v1alpha1
+        kind: Restore
+        displayName: Restore
+        description: One-shot SQL Server restore with point-in-time support
+      - name: scheduledbackups.mssql.popul.io
+        version: v1alpha1
+        kind: ScheduledBackup
+        displayName: Scheduled Backup
+        description: Cron-based SQL Server backup schedule
+      - name: availabilitygroups.mssql.popul.io
+        version: v1alpha1
+        kind: AvailabilityGroup
+        displayName: Availability Group
+        description: SQL Server Always On Availability Group
+      - name: agfailovers.mssql.popul.io
+        version: v1alpha1
+        kind: AGFailover
+        displayName: AG Failover
+        description: One-shot AG failover operation

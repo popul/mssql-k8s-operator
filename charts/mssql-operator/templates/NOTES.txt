@@ -1,0 +1,30 @@
+mssql-k8s-operator has been installed.
+
+{{- if .Values.leaderElection.enabled }}
+Leader election is enabled (recommended for HA).
+{{- end }}
+
+To verify the operator is running:
+
+  kubectl get pods -n {{ .Release.Namespace }} -l {{ include "mssql-operator.selectorLabels" . | replace ": " "=" | replace "\n" "," }}
+
+Create your first Database CR:
+
+  cat <<EOF | kubectl apply -f -
+  apiVersion: mssql.popul.io/v1alpha1
+  kind: Database
+  metadata:
+    name: my-database
+  spec:
+    server:
+      host: mssql.example.com
+      credentialsSecret:
+        name: sa-credentials
+    databaseName: MyDatabase
+  EOF
+
+List all MSSQL resources:
+
+  kubectl get mssql
+
+For more information, visit the project documentation.

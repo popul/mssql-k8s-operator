@@ -1,0 +1,75 @@
+replicaCount: 1
+
+image:
+  repository: ghcr.io/popul/mssql-k8s-operator
+  tag: ""  # defaults to Chart.appVersion
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}
+
+leaderElection:
+  enabled: true
+  leaseDuration: 15s
+  renewDeadline: 10s
+  retryPeriod: 2s
+
+resources:
+  limits:
+    cpu: 500m
+    memory: 128Mi
+  requests:
+    cpu: 10m
+    memory: 64Mi
+
+nodeSelector: {}
+tolerations: []
+affinity: {}
+
+# topologySpreadConstraints distributes pods across failure domains.
+# Automatically configured when replicaCount > 1 and no custom affinity is set.
+topologySpreadConstraints: []
+
+podAnnotations: {}
+podSecurityContext:
+  runAsNonRoot: true
+  seccompProfile:
+    type: RuntimeDefault
+
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop:
+      - ALL
+
+metrics:
+  enabled: true
+  port: 8080
+  serviceMonitor:
+    enabled: false
+    interval: "30s"
+    labels: {}
+  prometheusRule:
+    enabled: false
+    labels: {}
+    # additionalRules allows custom alert rules to be added
+    additionalRules: []
+
+health:
+  port: 8081
+
+webhook:
+  enabled: false
+  port: 9443
+
+networkPolicy:
+  enabled: false
+  apiServerCIDR: ""
+  sqlServerCIDR: ""

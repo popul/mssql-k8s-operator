@@ -1,0 +1,13 @@
+apiVersion: v2
+name: mssql-operator
+description: Kubernetes operator for managing SQL Server databases, logins, and users
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+keywords:
+  - mssql
+  - sql-server
+  - operator
+  - database
+maintainers:
+  - name: popul
