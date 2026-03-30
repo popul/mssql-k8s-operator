@@ -5,6 +5,7 @@ import (
 	"errors"
 	"testing"
 
+	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -245,5 +246,350 @@ func TestResolveServerReference_ViaSQLServerCR(t *testing.T) {
 	}
 	if resolved.CredentialsSecret.Name != "shared-creds" {
 		t.Errorf("expected creds=shared-creds, got %s", resolved.CredentialsSecret.Name)
+	}
+}
+
+// --- Managed mode tests ---
+
+func testManagedSQLServer(name string) *v1alpha1.SQLServer {
+	port := int32(1433)
+	replicas := int32(1)
+	image := "mcr.microsoft.com/mssql/server:2022-latest"
+	edition := "Developer"
+	storageSize := "10Gi"
+	svcType := corev1.ServiceTypeClusterIP
+	return &v1alpha1.SQLServer{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:       name,
+			Namespace:  "default",
+			Generation: 1,
+		},
+		Spec: v1alpha1.SQLServerSpec{
+			Port:       &port,
+			AuthMethod: v1alpha1.AuthSqlLogin,
+			CredentialsSecret: &v1alpha1.CrossNamespaceSecretReference{
+				Name: "sa-credentials",
+			},
+			Instance: &v1alpha1.InstanceSpec{
+				Image:            &image,
+				SAPasswordSecret: v1alpha1.SecretReference{Name: "mssql-sa-password"},
+				AcceptEULA:       true,
+				Edition:          &edition,
+				Replicas:         &replicas,
+				StorageSize:      &storageSize,
+				ServiceType:      &svcType,
+			},
+		},
+	}
+}
+
+func saPasswordSecret() *corev1.Secret {
+	return &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "mssql-sa-password",
+			Namespace: "default",
+		},
+		Data: map[string][]byte{
+			"MSSQL_SA_PASSWORD": []byte("P@ssw0rd!"),
+		},
+	}
+}
+
+func TestSQLServer_Managed_CreatesStatefulSetAndServices(t *testing.T) {
+	mockSQL := sqlclient.NewMockClient()
+	srv := testManagedSQLServer("managed-sql")
+	r, _ := newTestSQLServerReconciler([]runtime.Object{srv, saSecret(), saPasswordSecret()}, mockSQL)
+
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: "managed-sql", Namespace: "default"}}
+
+	// First reconcile: adds finalizer
+	result, err := r.Reconcile(context.Background(), req)
+	if err != nil {
+		t.Fatalf("first reconcile: %v", err)
+	}
+	if !result.Requeue {
+		t.Error("expected requeue after adding finalizer")
+	}
+
+	// Second reconcile: creates resources, but STS won't be ready
+	result, err = r.Reconcile(context.Background(), req)
+	if err != nil {
+		t.Fatalf("second reconcile: %v", err)
+	}
+
+	// Verify StatefulSet was created
+	var sts appsv1.StatefulSet
+	if err := r.Get(context.Background(), types.NamespacedName{Name: "managed-sql", Namespace: "default"}, &sts); err != nil {
+		t.Fatalf("StatefulSet not found: %v", err)
+	}
+	if *sts.Spec.Replicas != 1 {
+		t.Errorf("expected 1 replica, got %d", *sts.Spec.Replicas)
+	}
+	if sts.Spec.Template.Spec.Containers[0].Image != "mcr.microsoft.com/mssql/server:2022-latest" {
+		t.Errorf("unexpected image: %s", sts.Spec.Template.Spec.Containers[0].Image)
+	}
+
+	// Verify headless Service
+	var headlessSvc corev1.Service
+	if err := r.Get(context.Background(), types.NamespacedName{Name: "managed-sql-headless", Namespace: "default"}, &headlessSvc); err != nil {
+		t.Fatalf("headless Service not found: %v", err)
+	}
+	if headlessSvc.Spec.ClusterIP != "None" {
+		t.Error("expected ClusterIP=None for headless Service")
+	}
+
+	// Verify client Service
+	var clientSvc corev1.Service
+	if err := r.Get(context.Background(), types.NamespacedName{Name: "managed-sql", Namespace: "default"}, &clientSvc); err != nil {
+		t.Fatalf("client Service not found: %v", err)
+	}
+
+	// Status should show DeploymentProvisioning (STS not ready in fake client)
+	var updated v1alpha1.SQLServer
+	_ = r.Get(context.Background(), req.NamespacedName, &updated)
+	if len(updated.Status.Conditions) == 0 {
+		t.Fatal("expected conditions")
+	}
+	if updated.Status.Conditions[0].Reason != v1alpha1.ReasonDeploymentProvisioning {
+		t.Errorf("expected DeploymentProvisioning reason, got %s", updated.Status.Conditions[0].Reason)
+	}
+	if result.RequeueAfter == 0 {
+		t.Error("expected requeue while STS not ready")
+	}
+}
+
+func TestSQLServer_Managed_ReadyAfterSTSReady(t *testing.T) {
+	mockSQL := sqlclient.NewMockClient()
+	srv := testManagedSQLServer("managed-sql")
+	// Pre-create a ready StatefulSet
+	replicas := int32(1)
+	sts := &appsv1.StatefulSet{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "managed-sql",
+			Namespace: "default",
+		},
+		Spec: appsv1.StatefulSetSpec{
+			Replicas: &replicas,
+		},
+		Status: appsv1.StatefulSetStatus{
+			ReadyReplicas: 1,
+		},
+	}
+	r, _ := newTestSQLServerReconciler([]runtime.Object{srv, saSecret(), saPasswordSecret(), sts}, mockSQL)
+
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: "managed-sql", Namespace: "default"}}
+
+	// First reconcile: adds finalizer
+	_, err := r.Reconcile(context.Background(), req)
+	if err != nil {
+		t.Fatalf("first reconcile: %v", err)
+	}
+
+	// Second reconcile: STS is ready, should probe SQL and set Ready=True
+	result, err := r.Reconcile(context.Background(), req)
+	if err != nil {
+		t.Fatalf("second reconcile: %v", err)
+	}
+	if result.RequeueAfter == 0 {
+		t.Error("expected periodic requeue for health polling")
+	}
+
+	var updated v1alpha1.SQLServer
+	_ = r.Get(context.Background(), req.NamespacedName, &updated)
+	if updated.Status.Host != "managed-sql.default.svc.cluster.local" {
+		t.Errorf("unexpected status.host: %s", updated.Status.Host)
+	}
+	if updated.Status.ServerVersion == "" {
+		t.Error("expected ServerVersion to be set")
+	}
+	if len(updated.Status.Conditions) == 0 || updated.Status.Conditions[0].Status != metav1.ConditionTrue {
+		t.Error("expected Ready=True")
+	}
+}
+
+func TestSQLServer_Managed_Idempotent(t *testing.T) {
+	mockSQL := sqlclient.NewMockClient()
+	srv := testManagedSQLServer("managed-sql")
+	replicas := int32(1)
+	sts := &appsv1.StatefulSet{
+		ObjectMeta: metav1.ObjectMeta{Name: "managed-sql", Namespace: "default"},
+		Spec:       appsv1.StatefulSetSpec{Replicas: &replicas},
+		Status:     appsv1.StatefulSetStatus{ReadyReplicas: 1},
+	}
+	r, _ := newTestSQLServerReconciler([]runtime.Object{srv, saSecret(), saPasswordSecret(), sts}, mockSQL)
+
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: "managed-sql", Namespace: "default"}}
+
+	// Reconcile 3 times
+	for i := 0; i < 3; i++ {
+		if _, err := r.Reconcile(context.Background(), req); err != nil {
+			t.Fatalf("reconcile %d: %v", i+1, err)
+		}
+	}
+
+	var updated v1alpha1.SQLServer
+	_ = r.Get(context.Background(), req.NamespacedName, &updated)
+	if len(updated.Status.Conditions) != 1 {
+		t.Errorf("expected exactly 1 condition, got %d", len(updated.Status.Conditions))
+	}
+}
+
+func TestSQLServer_Managed_StatusHostPopulated(t *testing.T) {
+	mockSQL := sqlclient.NewMockClient()
+	srv := testManagedSQLServer("mydb")
+	replicas := int32(1)
+	sts := &appsv1.StatefulSet{
+		ObjectMeta: metav1.ObjectMeta{Name: "mydb", Namespace: "default"},
+		Spec:       appsv1.StatefulSetSpec{Replicas: &replicas},
+		Status:     appsv1.StatefulSetStatus{ReadyReplicas: 1},
+	}
+	r, _ := newTestSQLServerReconciler([]runtime.Object{srv, saSecret(), saPasswordSecret(), sts}, mockSQL)
+
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: "mydb", Namespace: "default"}}
+	// Finalizer
+	_, _ = r.Reconcile(context.Background(), req)
+	// Actual reconcile
+	_, _ = r.Reconcile(context.Background(), req)
+
+	var updated v1alpha1.SQLServer
+	_ = r.Get(context.Background(), req.NamespacedName, &updated)
+	expected := "mydb.default.svc.cluster.local"
+	if updated.Status.Host != expected {
+		t.Errorf("expected status.host=%s, got %s", expected, updated.Status.Host)
+	}
+}
+
+func TestSQLServer_Managed_ConnectionFailed(t *testing.T) {
+	mockSQL := sqlclient.NewMockClient()
+	mockSQL.ConnectError = errors.New("connection refused")
+	srv := testManagedSQLServer("managed-sql")
+	replicas := int32(1)
+	sts := &appsv1.StatefulSet{
+		ObjectMeta: metav1.ObjectMeta{Name: "managed-sql", Namespace: "default"},
+		Spec:       appsv1.StatefulSetSpec{Replicas: &replicas},
+		Status:     appsv1.StatefulSetStatus{ReadyReplicas: 1},
+	}
+	r, _ := newTestSQLServerReconciler([]runtime.Object{srv, saSecret(), saPasswordSecret(), sts}, mockSQL)
+
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: "managed-sql", Namespace: "default"}}
+	// Finalizer
+	_, _ = r.Reconcile(context.Background(), req)
+	// Actual reconcile
+	_, err := r.Reconcile(context.Background(), req)
+	if err == nil {
+		t.Fatal("expected error on connection failure")
+	}
+}
+
+func TestSQLServer_Managed_SchedulingConstraints(t *testing.T) {
+	mockSQL := sqlclient.NewMockClient()
+	srv := testManagedSQLServer("managed-sql")
+	srv.Spec.Instance.NodeSelector = map[string]string{"disktype": "ssd"}
+	srv.Spec.Instance.Tolerations = []corev1.Toleration{
+		{Key: "dedicated", Value: "mssql", Effect: corev1.TaintEffectNoSchedule},
+	}
+
+	r, _ := newTestSQLServerReconciler([]runtime.Object{srv, saSecret(), saPasswordSecret()}, mockSQL)
+
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: "managed-sql", Namespace: "default"}}
+	// Finalizer + create resources
+	_, _ = r.Reconcile(context.Background(), req)
+	_, _ = r.Reconcile(context.Background(), req)
+
+	var sts appsv1.StatefulSet
+	if err := r.Get(context.Background(), types.NamespacedName{Name: "managed-sql", Namespace: "default"}, &sts); err != nil {
+		t.Fatalf("StatefulSet not found: %v", err)
+	}
+	if sts.Spec.Template.Spec.NodeSelector["disktype"] != "ssd" {
+		t.Error("expected nodeSelector to be set on StatefulSet")
+	}
+	if len(sts.Spec.Template.Spec.Tolerations) != 1 {
+		t.Error("expected tolerations to be set on StatefulSet")
+	}
+}
+
+func TestSQLServer_Managed_ClusterMode_HADREnabled(t *testing.T) {
+	mockSQL := sqlclient.NewMockClient()
+	srv := testManagedSQLServer("cluster-sql")
+	replicas := int32(3)
+	srv.Spec.Instance.Replicas = &replicas
+
+	r, _ := newTestSQLServerReconciler([]runtime.Object{srv, saSecret(), saPasswordSecret()}, mockSQL)
+
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: "cluster-sql", Namespace: "default"}}
+	// Finalizer
+	_, _ = r.Reconcile(context.Background(), req)
+	// Create resources
+	_, _ = r.Reconcile(context.Background(), req)
+
+	var sts appsv1.StatefulSet
+	if err := r.Get(context.Background(), types.NamespacedName{Name: "cluster-sql", Namespace: "default"}, &sts); err != nil {
+		t.Fatalf("StatefulSet not found: %v", err)
+	}
+	if *sts.Spec.Replicas != 3 {
+		t.Errorf("expected 3 replicas, got %d", *sts.Spec.Replicas)
+	}
+
+	// Check HADR is enabled in env
+	container := sts.Spec.Template.Spec.Containers[0]
+	foundHADR := false
+	for _, env := range container.Env {
+		if env.Name == "MSSQL_ENABLE_HADR" && env.Value == "1" {
+			foundHADR = true
+		}
+	}
+	if !foundHADR {
+		t.Error("expected MSSQL_ENABLE_HADR=1 for cluster mode")
+	}
+
+	// Check HADR port
+	foundHADRPort := false
+	for _, port := range container.Ports {
+		if port.Name == "hadr" && port.ContainerPort == 5022 {
+			foundHADRPort = true
+		}
+	}
+	if !foundHADRPort {
+		t.Error("expected HADR port 5022 for cluster mode")
+	}
+
+	// Check headless service has HADR port
+	var headlessSvc corev1.Service
+	if err := r.Get(context.Background(), types.NamespacedName{Name: "cluster-sql-headless", Namespace: "default"}, &headlessSvc); err != nil {
+		t.Fatalf("headless Service not found: %v", err)
+	}
+	foundHADRSvcPort := false
+	for _, port := range headlessSvc.Spec.Ports {
+		if port.Name == "hadr" && port.Port == 5022 {
+			foundHADRSvcPort = true
+		}
+	}
+	if !foundHADRSvcPort {
+		t.Error("expected HADR port on headless Service for cluster mode")
+	}
+}
+
+func TestResolveServerReference_ManagedMode_UsesStatusHost(t *testing.T) {
+	srv := &v1alpha1.SQLServer{
+		ObjectMeta: metav1.ObjectMeta{Name: "managed-sql", Namespace: "default"},
+		Spec: v1alpha1.SQLServerSpec{
+			// No Host — managed mode
+			CredentialsSecret: &v1alpha1.CrossNamespaceSecretReference{Name: "sa-creds"},
+		},
+		Status: v1alpha1.SQLServerStatus{
+			Host: "managed-sql.default.svc.cluster.local",
+		},
+	}
+	scheme := newScheme()
+	k8sClient := fake.NewClientBuilder().WithScheme(scheme).WithRuntimeObjects(srv).Build()
+
+	srvName := "managed-sql"
+	ref := v1alpha1.ServerReference{SQLServerRef: &srvName}
+	resolved, err := resolveServerReference(context.Background(), k8sClient, "default", ref)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if resolved.Host != "managed-sql.default.svc.cluster.local" {
+		t.Errorf("expected managed host, got %s", resolved.Host)
 	}
 }

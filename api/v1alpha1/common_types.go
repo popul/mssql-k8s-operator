@@ -72,6 +72,11 @@ const (
 	ReasonInvalidServerRole           = "InvalidServerRole"
 	ReasonDatabaseProvisioning        = "DatabaseProvisioning"
 	ReasonSchemaNotEmpty              = "SchemaNotEmpty"
+	ReasonDeploymentProvisioning      = "DeploymentProvisioning"
+	ReasonDeploymentReady             = "DeploymentReady"
+	ReasonEULANotAccepted             = "EULANotAccepted"
+	ReasonCertificatesProvisioning    = "CertificatesProvisioning"
+	ReasonAGProvisioning              = "AGProvisioning"
 )
 
 // Finalizer name used by all CRDs in this operator.

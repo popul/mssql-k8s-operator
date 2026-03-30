@@ -70,6 +70,17 @@ type SQLClient interface {
 	CreateHADREndpoint(ctx context.Context, port int) error
 	HADREndpointExists(ctx context.Context) (bool, error)
 
+	// Certificate and endpoint operations for HADR
+	CreateMasterKey(ctx context.Context, password string) error
+	MasterKeyExists(ctx context.Context) (bool, error)
+	CreateCertificate(ctx context.Context, certName, subject string, expiryDate string) error
+	CertificateExists(ctx context.Context, certName string) (bool, error)
+	BackupCertificate(ctx context.Context, certName, certPath, keyPath, encryptionPassword string) error
+	CreateCertificateFromBackup(ctx context.Context, certName, certPath, keyPath, decryptionPassword string) error
+	CreateLoginFromCertificate(ctx context.Context, loginName, certName string) error
+	GrantEndpointConnect(ctx context.Context, endpointName, loginName string) error
+	CreateHADREndpointWithCert(ctx context.Context, port int, certName string) error
+
 	// Server info
 	GetServerVersion(ctx context.Context) (string, error)
 	GetServerEdition(ctx context.Context) (string, error)

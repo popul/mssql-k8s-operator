@@ -234,8 +234,13 @@ func resolveServerReference(ctx context.Context, c client.Client, namespace stri
 	if err := c.Get(ctx, types.NamespacedName{Name: *ref.SQLServerRef, Namespace: namespace}, &srv); err != nil {
 		return ref, fmt.Errorf("failed to resolve SQLServer %q: %w", *ref.SQLServerRef, err)
 	}
+	// In managed mode, spec.host is empty; use status.host instead.
+	host := srv.Spec.Host
+	if host == "" {
+		host = srv.Status.Host
+	}
 	resolved := v1alpha1.ServerReference{
-		Host: srv.Spec.Host,
+		Host: host,
 		Port: srv.Spec.Port,
 		TLS:  srv.Spec.TLS,
 	}

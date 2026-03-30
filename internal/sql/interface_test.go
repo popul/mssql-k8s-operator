@@ -161,6 +161,29 @@ func (c *interfaceChecker) CreateHADREndpoint(ctx context.Context, port int) err
 func (c *interfaceChecker) HADREndpointExists(ctx context.Context) (bool, error) {
 	return false, nil
 }
+func (c *interfaceChecker) CreateMasterKey(ctx context.Context, password string) error { return nil }
+func (c *interfaceChecker) MasterKeyExists(ctx context.Context) (bool, error)          { return false, nil }
+func (c *interfaceChecker) CreateCertificate(ctx context.Context, certName, subject, expiryDate string) error {
+	return nil
+}
+func (c *interfaceChecker) CertificateExists(ctx context.Context, certName string) (bool, error) {
+	return false, nil
+}
+func (c *interfaceChecker) BackupCertificate(ctx context.Context, certName, certPath, keyPath, encryptionPassword string) error {
+	return nil
+}
+func (c *interfaceChecker) CreateCertificateFromBackup(ctx context.Context, certName, certPath, keyPath, decryptionPassword string) error {
+	return nil
+}
+func (c *interfaceChecker) CreateLoginFromCertificate(ctx context.Context, loginName, certName string) error {
+	return nil
+}
+func (c *interfaceChecker) GrantEndpointConnect(ctx context.Context, endpointName, loginName string) error {
+	return nil
+}
+func (c *interfaceChecker) CreateHADREndpointWithCert(ctx context.Context, port int, certName string) error {
+	return nil
+}
 
 func (c *interfaceChecker) GetServerVersion(ctx context.Context) (string, error) {
 	return "", nil

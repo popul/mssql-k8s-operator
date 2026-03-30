@@ -726,6 +726,95 @@ func (c *MSSQLClient) HADREndpointExists(ctx context.Context) (bool, error) {
 	return exists, err
 }
 
+// --- Certificate operations for HADR ---
+
+func (c *MSSQLClient) CreateMasterKey(ctx context.Context, password string) error {
+	query := fmt.Sprintf("CREATE MASTER KEY ENCRYPTION BY PASSWORD = %s", QuoteString(password))
+	_, err := c.db.ExecContext(ctx, query)
+	if err != nil {
+		return fmt.Errorf("failed to create master key: %w", err)
+	}
+	return nil
+}
+
+func (c *MSSQLClient) MasterKeyExists(ctx context.Context) (bool, error) {
+	var exists bool
+	err := c.db.QueryRowContext(ctx,
+		"SELECT CASE WHEN EXISTS (SELECT 1 FROM sys.symmetric_keys WHERE name = '##MS_DatabaseMasterKey##') THEN 1 ELSE 0 END").Scan(&exists)
+	return exists, err
+}
+
+func (c *MSSQLClient) CreateCertificate(ctx context.Context, certName, subject, expiryDate string) error {
+	query := fmt.Sprintf("CREATE CERTIFICATE %s WITH SUBJECT = %s, EXPIRY_DATE = %s",
+		QuoteName(certName), QuoteString(subject), QuoteString(expiryDate))
+	_, err := c.db.ExecContext(ctx, query)
+	if err != nil {
+		return fmt.Errorf("failed to create certificate %s: %w", certName, err)
+	}
+	return nil
+}
+
+func (c *MSSQLClient) CertificateExists(ctx context.Context, certName string) (bool, error) {
+	var exists bool
+	err := c.db.QueryRowContext(ctx,
+		"SELECT CASE WHEN EXISTS (SELECT 1 FROM sys.certificates WHERE name = @p1) THEN 1 ELSE 0 END", certName).Scan(&exists)
+	return exists, err
+}
+
+func (c *MSSQLClient) BackupCertificate(ctx context.Context, certName, certPath, keyPath, encryptionPassword string) error {
+	query := fmt.Sprintf("BACKUP CERTIFICATE %s TO FILE = %s WITH PRIVATE KEY (FILE = %s, ENCRYPTION BY PASSWORD = %s)",
+		QuoteName(certName), QuoteString(certPath), QuoteString(keyPath), QuoteString(encryptionPassword))
+	_, err := c.db.ExecContext(ctx, query)
+	if err != nil {
+		return fmt.Errorf("failed to backup certificate %s: %w", certName, err)
+	}
+	return nil
+}
+
+func (c *MSSQLClient) CreateCertificateFromBackup(ctx context.Context, certName, certPath, keyPath, decryptionPassword string) error {
+	query := fmt.Sprintf("CREATE CERTIFICATE %s FROM FILE = %s WITH PRIVATE KEY (FILE = %s, DECRYPTION BY PASSWORD = %s)",
+		QuoteName(certName), QuoteString(certPath), QuoteString(keyPath), QuoteString(decryptionPassword))
+	_, err := c.db.ExecContext(ctx, query)
+	if err != nil {
+		return fmt.Errorf("failed to create certificate %s from backup: %w", certName, err)
+	}
+	return nil
+}
+
+func (c *MSSQLClient) CreateLoginFromCertificate(ctx context.Context, loginName, certName string) error {
+	query := fmt.Sprintf("CREATE LOGIN %s FROM CERTIFICATE %s", QuoteName(loginName), QuoteName(certName))
+	_, err := c.db.ExecContext(ctx, query)
+	if err != nil {
+		return fmt.Errorf("failed to create login %s from certificate %s: %w", loginName, certName, err)
+	}
+	return nil
+}
+
+func (c *MSSQLClient) GrantEndpointConnect(ctx context.Context, endpointName, loginName string) error {
+	query := fmt.Sprintf("GRANT CONNECT ON ENDPOINT::%s TO %s", QuoteName(endpointName), QuoteName(loginName))
+	_, err := c.db.ExecContext(ctx, query)
+	if err != nil {
+		return fmt.Errorf("failed to grant connect on endpoint %s to %s: %w", endpointName, loginName, err)
+	}
+	return nil
+}
+
+func (c *MSSQLClient) CreateHADREndpointWithCert(ctx context.Context, port int, certName string) error {
+	query := fmt.Sprintf(`CREATE ENDPOINT hadr_endpoint
+    STATE = STARTED
+    AS TCP (LISTENER_PORT = %d)
+    FOR DATABASE_MIRRORING (
+        ROLE = ALL,
+        AUTHENTICATION = CERTIFICATE %s,
+        ENCRYPTION = REQUIRED ALGORITHM AES
+    )`, port, QuoteName(certName))
+	_, err := c.db.ExecContext(ctx, query)
+	if err != nil {
+		return fmt.Errorf("failed to create HADR endpoint with cert on port %d: %w", port, err)
+	}
+	return nil
+}
+
 // --- Backup/Restore operations ---
 
 func (c *MSSQLClient) BackupDatabase(ctx context.Context, dbName, destination, backupType string, compression bool) error {

@@ -1021,6 +1021,120 @@ func (m *MockClient) WasCalledLocked(method string) bool {
 	return m.calls[method] > 0
 }
 
+// --- Certificate operations ---
+
+func (m *MockClient) CreateMasterKey(_ context.Context, _ string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.track("CreateMasterKey")
+	if err := m.checkConnect(); err != nil {
+		return err
+	}
+	if err := m.checkMethodError("CreateMasterKey"); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (m *MockClient) MasterKeyExists(_ context.Context) (bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.track("MasterKeyExists")
+	if err := m.checkConnect(); err != nil {
+		return false, err
+	}
+	return m.WasCalledLocked("CreateMasterKey"), nil
+}
+
+func (m *MockClient) CreateCertificate(_ context.Context, certName, _, _ string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.track("CreateCertificate")
+	if err := m.checkConnect(); err != nil {
+		return err
+	}
+	if err := m.checkMethodError("CreateCertificate"); err != nil {
+		return err
+	}
+	_ = certName
+	return nil
+}
+
+func (m *MockClient) CertificateExists(_ context.Context, _ string) (bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.track("CertificateExists")
+	if err := m.checkConnect(); err != nil {
+		return false, err
+	}
+	return m.WasCalledLocked("CreateCertificate"), nil
+}
+
+func (m *MockClient) BackupCertificate(_ context.Context, _, _, _, _ string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.track("BackupCertificate")
+	if err := m.checkConnect(); err != nil {
+		return err
+	}
+	if err := m.checkMethodError("BackupCertificate"); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (m *MockClient) CreateCertificateFromBackup(_ context.Context, _, _, _, _ string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.track("CreateCertificateFromBackup")
+	if err := m.checkConnect(); err != nil {
+		return err
+	}
+	if err := m.checkMethodError("CreateCertificateFromBackup"); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (m *MockClient) CreateLoginFromCertificate(_ context.Context, _, _ string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.track("CreateLoginFromCertificate")
+	if err := m.checkConnect(); err != nil {
+		return err
+	}
+	if err := m.checkMethodError("CreateLoginFromCertificate"); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (m *MockClient) GrantEndpointConnect(_ context.Context, _, _ string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.track("GrantEndpointConnect")
+	if err := m.checkConnect(); err != nil {
+		return err
+	}
+	if err := m.checkMethodError("GrantEndpointConnect"); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (m *MockClient) CreateHADREndpointWithCert(_ context.Context, _ int, _ string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.track("CreateHADREndpointWithCert")
+	if err := m.checkConnect(); err != nil {
+		return err
+	}
+	if err := m.checkMethodError("CreateHADREndpointWithCert"); err != nil {
+		return err
+	}
+	return nil
+}
+
 // --- Backup/Restore operations ---
 
 func (m *MockClient) BackupDatabase(_ context.Context, dbName, destination, backupType string, compression bool) error {

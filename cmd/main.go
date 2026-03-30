@@ -197,6 +197,7 @@ func main() {
 			&v1alpha1.Schema{},
 			&v1alpha1.Permission{},
 			&v1alpha1.AvailabilityGroup{},
+			&v1alpha1.SQLServer{},
 		}
 		for _, obj := range webhookTypes {
 			if err := ctrl.NewWebhookManagedBy(mgr).For(obj).Complete(); err != nil {
