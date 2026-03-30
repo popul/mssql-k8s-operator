@@ -71,18 +71,54 @@ The operator creates:
 - **HADR certificates** (if replicas > 1)
 - An **Availability Group** (if replicas > 1)
 
-## Step 4: Use it with other CRs
+## Step 4: Create a database
 
-Reference the `SQLServer` CR by name in your Database, Login, and other CRs:
-
-```yaml
+```bash
+cat <<EOF | kubectl apply -f -
+apiVersion: mssql.popul.io/v1alpha1
+kind: Database
+metadata:
+  name: myapp-db
+  namespace: mssql
 spec:
   server:
     sqlServerRef: mssql
   databaseName: myapp
+EOF
 ```
 
-No need to specify host, port, or credentials -- the operator resolves everything from the `SQLServer` CR.
+```bash
+kubectl get msdb -n mssql
+# NAME       DATABASE   READY   AGE
+# myapp-db   myapp      True    5s
+```
+
+The `sqlServerRef` references the `SQLServer` CR by name -- no need to repeat host, port, or credentials. This works for all CRs: `Database`, `Login`, `DatabaseUser`, `Schema`, `Permission`, `Backup`, etc.
+
+## Step 5: Connect to the database
+
+**From inside the cluster** (via the pod):
+
+```bash
+kubectl exec -it mssql-0 -n mssql -- /opt/mssql-tools18/bin/sqlcmd \
+  -S localhost -U sa -P 'YourStr0ngP@ssword!' -d myapp -C
+```
+
+**From your machine** (via port-forward):
+
+```bash
+kubectl port-forward svc/mssql 1433:1433 -n mssql
+```
+
+Then connect with any SQL client:
+
+```bash
+# sqlcmd (Microsoft CLI)
+sqlcmd -S localhost -U sa -P 'YourStr0ngP@ssword!' -d myapp
+
+# Azure Data Studio, DBeaver, DataGrip...
+# Host: localhost, Port: 1433, User: sa, Database: myapp
+```
 
 ## Instance spec reference
 

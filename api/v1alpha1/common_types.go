@@ -32,7 +32,6 @@ type ServerReference struct {
 // SecretReference is a reference to a Kubernetes Secret by name (same namespace).
 type SecretReference struct {
 	// Name of the Secret.
-	// +kubebuilder:validation:MinLength=1
 	Name string `json:"name"`
 }
 

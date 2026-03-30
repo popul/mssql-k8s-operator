@@ -1250,7 +1250,6 @@ spec:
                     properties:
                       name:
                         description: Name of the Secret.
-                        minLength: 1
                         type: string
                     required:
                     - name
