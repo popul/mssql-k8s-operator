@@ -15,24 +15,87 @@ All CRDs use a single condition type: `Ready`.
 
 ## Reasons
 
-| Reason | Status | Description | CRDs |
-|--------|--------|-------------|------|
-| `Ready` | `True` | Resource is reconciled and matches desired state | All |
-| `ConnectionFailed` | `False` | Cannot connect to SQL Server | All |
-| `SecretNotFound` | `False` | Referenced credentials Secret does not exist | All |
-| `InvalidCredentialsSecret` | `False` | Secret is missing `username` or `password` key | All |
-| `CollationChangeNotSupported` | `False` | Collation drift detected (immutable field) | Database |
-| `DatabaseProvisioning` | `False` | Database is being created | Database |
-| `LoginInUse` | `False` | Login has dependent database users, cannot delete | Login |
-| `InvalidServerRole` | `False` | Server role name is invalid | Login |
-| `LoginRefNotFound` | `False` | Referenced Login CR does not exist | DatabaseUser |
-| `LoginNotReady` | `False` | Referenced Login CR is not Ready | DatabaseUser |
-| `UserOwnsObjects` | `False` | User owns database objects, cannot delete | DatabaseUser |
-| `SchemaNotEmpty` | `False` | Schema contains objects, cannot drop | Schema |
+### Common (all CRDs)
+
+| Reason | Status | Description |
+|--------|--------|-------------|
+| `Ready` | `True` | Resource is reconciled and matches desired state |
+| `ConnectionFailed` | `False` | Cannot connect to SQL Server |
+| `SecretNotFound` | `False` | Referenced credentials Secret does not exist |
+| `InvalidCredentialsSecret` | `False` | Secret is missing `username` or `password` key |
+
+### SQLServer (managed mode)
+
+| Reason | Status | Description |
+|--------|--------|-------------|
+| `DeploymentProvisioning` | `False` | StatefulSet pods are not yet ready |
+| `DeploymentReady` | `True` | All infrastructure is ready |
+| `EULANotAccepted` | `False` | `instance.acceptEULA` is not `true` |
+| `CertificatesProvisioning` | `False` | HADR certificates are being generated/distributed |
+| `AGProvisioning` | `False` | Availability Group is being created/configured |
+
+### Database
+
+| Reason | Status | Description |
+|--------|--------|-------------|
+| `DatabaseProvisioning` | `False` | Database is being created |
+| `CollationChangeNotSupported` | `False` | Collation drift detected (immutable field) |
+
+### Login
+
+| Reason | Status | Description |
+|--------|--------|-------------|
+| `LoginInUse` | `False` | Login has dependent database users, cannot delete |
+| `InvalidServerRole` | `False` | Server role name is invalid |
+
+### DatabaseUser
+
+| Reason | Status | Description |
+|--------|--------|-------------|
+| `LoginRefNotFound` | `False` | Referenced Login CR does not exist |
+| `LoginNotReady` | `False` | Referenced Login CR is not Ready |
+| `UserOwnsObjects` | `False` | User owns database objects, cannot delete |
+
+### Schema
+
+| Reason | Status | Description |
+|--------|--------|-------------|
+| `SchemaNotEmpty` | `False` | Schema contains objects, cannot drop |
+
+### Backup / Restore
+
+| Reason | Status | Description |
+|--------|--------|-------------|
+| `BackupRunning` | `False` | Backup is in progress |
+| `BackupCompleted` | `True` | Backup completed successfully |
+| `BackupFailed` | `False` | Backup failed |
+| `RestoreRunning` | `False` | Restore is in progress |
+| `RestoreCompleted` | `True` | Restore completed successfully |
+| `RestoreFailed` | `False` | Restore failed |
+| `DatabaseNotFound` | `False` | Database does not exist (for backup) |
+
+### AvailabilityGroup
+
+| Reason | Status | Description |
+|--------|--------|-------------|
+| `AGProvisioning` | `False` | AG is being created or configured |
+| `AGReady` | `True` | AG is operational with primary and secondaries |
+| `PrimaryUnreachable` | `False` | Cannot connect to the primary replica |
 
 ## Events
 
-The operator emits Kubernetes events on significant actions. View them with `kubectl describe`.
+The operator emits Kubernetes events on CRs for significant actions. View them with `kubectl describe`.
+
+### SQLServer events
+
+| Event | Type | Description |
+|-------|------|-------------|
+| `StatefulSetCreated` | Normal | StatefulSet was created (managed mode) |
+| `ServiceCreated` | Normal | Service was created (managed mode) |
+| `CertificatesReady` | Normal | HADR certificates provisioned |
+| `AGCreated` | Normal | Availability Group created (managed mode) |
+| `AutoFailoverCompleted` | Normal | Auto-failover completed (managed mode) |
+| `ConnectionFailed` | Warning | Cannot connect to SQL Server |
 
 ### Database events
 
@@ -41,6 +104,7 @@ The operator emits Kubernetes events on significant actions. View them with `kub
 | `DatabaseCreated` | Normal | Database was created on SQL Server |
 | `DatabaseDropped` | Normal | Database was dropped on SQL Server |
 | `DatabaseOwnerUpdated` | Normal | `ALTER AUTHORIZATION` was executed |
+| `RecoveryModelUpdated` | Normal | Recovery model was changed |
 | `ConnectionFailed` | Warning | Cannot connect to SQL Server |
 
 ### Login events
@@ -80,6 +144,37 @@ The operator emits Kubernetes events on significant actions. View them with `kub
 | `PermissionRevoked` | Normal | Permission was REVOKEd |
 | `PermissionsRevoked` | Normal | All permissions revoked on deletion |
 
+### Backup / Restore events
+
+| Event | Type | Description |
+|-------|------|-------------|
+| `BackupStarted` | Normal | Backup started |
+| `BackupCompleted` | Normal | Backup completed successfully |
+| `BackupFailed` | Warning | Backup failed |
+| `RestoreStarted` | Normal | Restore started |
+| `RestoreCompleted` | Normal | Restore completed successfully |
+| `RestoreFailed` | Warning | Restore failed |
+
+### AvailabilityGroup events
+
+| Event | Type | Description |
+|-------|------|-------------|
+| `AGCreated` | Normal | AG was created on SQL Server |
+| `AGDropped` | Normal | AG was dropped on SQL Server |
+| `ReplicaJoined` | Normal | Secondary replica joined the AG |
+| `DatabaseJoined` | Normal | Database was added to the AG |
+| `AutoFailoverCompleted` | Normal | Auto-failover completed |
+| `AutoFailoverFailed` | Warning | Auto-failover failed |
+| `PrimaryUnreachable` | Warning | Cannot connect to primary replica |
+
+### AGFailover events
+
+| Event | Type | Description |
+|-------|------|-------------|
+| `FailoverStarted` | Normal | Manual failover started |
+| `FailoverCompleted` | Normal | Manual failover completed |
+| `FailoverFailed` | Warning | Manual failover failed |
+
 ## Metrics
 
 | Metric | Type | Labels | Description |
@@ -88,6 +183,12 @@ The operator emits Kubernetes events on significant actions. View them with `kub
 | `mssql_operator_reconcile_total` | Counter | `controller`, `result` | Total reconciliations |
 | `mssql_operator_reconcile_errors_total` | Counter | `controller`, `reason` | Error count |
 | `mssql_operator_managed_resources` | Gauge | `type`, `namespace` | Number of managed SQL Server resources |
+| `mssql_database_ready` | Gauge | `name`, `namespace` | Database CR is Ready (1/0) |
+| `mssql_login_ready` | Gauge | `name`, `namespace` | Login CR is Ready (1/0) |
+| `mssql_server_connected` | Gauge | `name`, `namespace` | SQLServer can be reached (1/0) |
+| `mssql_backup_last_success_timestamp` | Gauge | `name`, `namespace` | Unix timestamp of last successful scheduled backup |
+| `mssql_scheduled_backup_total` | Gauge | `name`, `namespace`, `result` | Total backups from a scheduled backup |
+| `mssql_ag_replica_synchronized` | Gauge | `ag`, `replica`, `namespace` | AG replica is synchronized (1/0) |
 
 ## Health endpoints
 

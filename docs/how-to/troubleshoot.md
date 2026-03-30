@@ -17,6 +17,39 @@ Look at the `Conditions` section and `Events`. The `Reason` field tells you what
 | `ConnectionFailed` | Verify SQL Server is reachable (see below) |
 | `LoginRefNotFound` | Create the Login CR referenced in `loginRef` |
 | `LoginNotReady` | Wait for the Login CR to become Ready |
+| `DeploymentProvisioning` | Managed SQLServer: StatefulSet pods are not yet ready |
+| `CertificatesProvisioning` | Managed SQLServer: HADR certificates are being provisioned |
+| `AGProvisioning` | Managed SQLServer: Availability Group is being created |
+| `EULANotAccepted` | Managed SQLServer: set `instance.acceptEULA: true` |
+
+## Managed SQLServer not becoming Ready
+
+If your managed `SQLServer` CR is stuck:
+
+1. Check the StatefulSet status:
+
+```bash
+kubectl get sts mssql -n mssql
+kubectl describe sts mssql -n mssql
+```
+
+2. Check pod logs:
+
+```bash
+kubectl logs mssql-0 -n mssql
+```
+
+3. Common causes:
+   - **Insufficient memory**: SQL Server requires at least 2Gi
+   - **Storage provisioning failed**: check PVC status with `kubectl get pvc -n mssql`
+   - **SA password too weak**: must meet SQL Server complexity requirements
+   - **EULA not accepted**: set `instance.acceptEULA: true`
+
+4. For cluster mode (replicas > 1), check certificates:
+
+```bash
+kubectl get secrets -n mssql | grep cert
+```
 
 ## CR stuck in Terminating
 
@@ -47,22 +80,35 @@ Move or drop the objects in the schema, then the Schema CR deletion will proceed
 
 ## SQL Server connection errors
 
-1. Verify the SQL Server is reachable from inside the cluster:
+1. Check the SQLServer CR status:
+
+```bash
+kubectl get sqlsrv -n mssql
+kubectl describe sqlsrv mssql -n mssql
+```
+
+2. For managed instances, verify the pod is running:
+
+```bash
+kubectl get pods -n mssql -l app.kubernetes.io/instance=mssql
+```
+
+3. For external instances, verify connectivity from inside the cluster:
 
 ```bash
 kubectl run test-sql --rm -it --image=mcr.microsoft.com/mssql-tools -- \
-  /opt/mssql-tools/bin/sqlcmd -S mssql.database.svc.cluster.local -U sa -P 'password'
+  /opt/mssql-tools/bin/sqlcmd -S mssql.mssql.svc.cluster.local -U sa -P 'password'
 ```
 
-2. Check the Secret exists and has the correct keys:
+4. Check the credentials Secret exists and has the correct keys:
 
 ```bash
-kubectl get secret mssql-sa-credentials -o jsonpath='{.data}' | jq
+kubectl get secret sa-credentials -o jsonpath='{.data}' | jq
 ```
 
-3. If `NetworkPolicy` is enabled, ensure egress to SQL Server port 1433 is allowed.
+5. If `NetworkPolicy` is enabled, ensure egress to SQL Server port 1433 is allowed.
 
-4. If TLS is enabled (`tls: true`), ensure the SQL Server certificate is trusted.
+6. If TLS is enabled (`tls: true`), ensure the SQL Server certificate is trusted.
 
 ## Operator not reconciling
 
@@ -75,7 +121,7 @@ kubectl logs -n mssql-operator-system deploy/mssql-operator
 2. Verify CRDs are installed:
 
 ```bash
-kubectl get crd databases.mssql.popul.io
+kubectl get crd databases.mssql.popul.io sqlservers.mssql.popul.io
 ```
 
 3. Check RBAC:

@@ -6,7 +6,10 @@ This document explains how the MSSQL Kubernetes Operator works internally, the d
 
 A Kubernetes operator extends the API with Custom Resource Definitions (CRDs) and runs controllers that continuously reconcile the declared state with the actual state of an external system. In our case, the external system is Microsoft SQL Server.
 
-The operator does not deploy or manage the SQL Server instance itself. It manages **objects inside SQL Server** (databases, logins, users, schemas, permissions) by connecting via TDS (the SQL Server wire protocol) and executing T-SQL statements.
+The operator has two modes:
+
+- **Managed mode**: the `SQLServer` CR includes `spec.instance`, and the operator deploys SQL Server itself (StatefulSet, Services, PVCs, certificates, Availability Group). It then manages objects inside that instance.
+- **External mode**: the `SQLServer` CR points to an existing SQL Server via `spec.host`. The operator manages **objects inside SQL Server** (databases, logins, users, schemas, permissions) by connecting via TDS (the SQL Server wire protocol) and executing T-SQL statements.
 
 ## Reconciliation loop
 
@@ -20,6 +23,17 @@ Each controller follows the same pattern:
 5. Act      — Execute DDL/DCL to converge (CREATE, ALTER, GRANT, etc.).
 6. Report   — Update the status conditions and ObservedGeneration.
 ```
+
+For managed `SQLServer` CRs, the reconciliation has additional phases:
+
+```
+1. Infrastructure — Create/update StatefulSet, headless Service, client Service
+2. Certificates   — Generate and distribute HADR certificates (if replicas > 1)
+3. AG             — Create/configure Availability Group (if replicas > 1)
+4. Probe          — Connect to SQL Server and update status (version, edition, etc.)
+```
+
+Each phase requeues if not yet ready, ensuring non-blocking progression.
 
 This is **level-triggered**, not edge-triggered. The controller does not react to individual events. It compares the full desired state to the full observed state on every reconciliation. This makes the system self-healing: if someone manually changes something on SQL Server, the next reconciliation detects the drift and corrects it.
 
@@ -55,7 +69,22 @@ The behavior for structural blockers varies by controller:
 | Database | None | Always removes finalizer (logs error if DROP fails) |
 | Permission | None | Always removes finalizer (logs error if REVOKE fails) |
 
-Database and Permission controllers always remove the finalizer on deletion because there is no user-actionable blocker — a failed DROP or REVOKE is typically a transient issue that should not leave the CR stuck indefinitely.
+Database and Permission controllers always remove the finalizer on deletion because there is no user-actionable blocker -- a failed DROP or REVOKE is typically a transient issue that should not leave the CR stuck indefinitely.
+
+## Managed mode: SQLServer controller
+
+When `spec.instance` is set, the SQLServer controller manages the full lifecycle of SQL Server infrastructure:
+
+1. **StatefulSet** with VolumeClaimTemplates for persistent storage per replica
+2. **Headless Service** for inter-pod DNS resolution (required for HADR)
+3. **Client Service** for application access (configurable type: ClusterIP, NodePort, LoadBalancer)
+4. **Self-signed certificates** (or cert-manager integration) for HADR endpoint authentication
+5. **Availability Group** creation and secondary joining (for replicas > 1)
+6. **Auto-failover** monitoring and execution via Kubernetes Leases
+
+All child resources (StatefulSet, Services, Secrets) have owner references back to the `SQLServer` CR, ensuring garbage collection on deletion.
+
+Other CRDs (`Database`, `Login`, etc.) reference the `SQLServer` CR via `sqlServerRef` and the controller resolves the connection details from the `SQLServer` CR's status.
 
 ## Secret watches
 
@@ -100,6 +129,7 @@ This follows the convention used by many Kubernetes operators and aligns with th
 | Transient error | Return error, controller-runtime applies exponential backoff |
 | Permanent error | Set condition, return `Result{}` (no requeue, no error) |
 | Deletion blocked | `RequeueAfter: 30s` (with jitter) |
+| Managed mode: phase not ready | `RequeueAfter: 10s` (wait for infrastructure) |
 
 The 30-second periodic requeue serves two purposes:
 1. Detect drift between the declared state and SQL Server (e.g., someone manually dropped a database)
