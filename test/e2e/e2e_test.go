@@ -3065,6 +3065,526 @@ func TestE2EAutoFailover(t *testing.T) {
 	}
 }
 
+// =============================================================================
+// Managed SQLServer E2E Tests (operator-managed StatefulSet/Services/Certs/AG)
+// =============================================================================
+
+// TestE2EManagedSQLServer_Standalone tests a managed SQLServer CR with 1 replica.
+// The operator should create StatefulSet, Services, PVCs, and probe SQL connectivity.
+func TestE2EManagedSQLServer_Standalone(t *testing.T) {
+	srvKey := types.NamespacedName{Name: "managed-standalone", Namespace: testNamespace}
+
+	t.Run("CreateManagedSQLServer", func(t *testing.T) {
+		srv := &mssqlv1.SQLServer{
+			ObjectMeta: metav1.ObjectMeta{Name: srvKey.Name, Namespace: srvKey.Namespace},
+			Spec: mssqlv1.SQLServerSpec{
+				CredentialsSecret: &mssqlv1.CrossNamespaceSecretReference{
+					Name: "mssql-sa-credentials",
+				},
+				Instance: &mssqlv1.InstanceSpec{
+					AcceptEULA:       true,
+					SAPasswordSecret: mssqlv1.SecretReference{Name: "mssql-sa-password"},
+					Replicas:         ptr(int32(1)),
+					StorageSize:      ptr("1Gi"),
+					Resources: &corev1.ResourceRequirements{
+						Requests: corev1.ResourceList{
+							corev1.ResourceMemory: resource.MustParse("512Mi"),
+							corev1.ResourceCPU:    resource.MustParse("250m"),
+						},
+						Limits: corev1.ResourceList{
+							corev1.ResourceMemory: resource.MustParse("2Gi"),
+						},
+					},
+				},
+			},
+		}
+		if err := k8sClient.Create(ctx, srv); err != nil {
+			t.Fatalf("Failed to create managed SQLServer CR: %v", err)
+		}
+	})
+
+	t.Run("StatefulSetCreated", func(t *testing.T) {
+		stsKey := types.NamespacedName{Name: srvKey.Name, Namespace: srvKey.Namespace}
+		err := wait.PollUntilContextTimeout(ctx, pollInterval, pollTimeout, true, func(ctx context.Context) (bool, error) {
+			var sts appsv1.StatefulSet
+			if err := k8sClient.Get(ctx, stsKey, &sts); err != nil {
+				return false, nil
+			}
+			return sts.Spec.Replicas != nil && *sts.Spec.Replicas == 1, nil
+		})
+		if err != nil {
+			t.Fatalf("StatefulSet was not created: %v", err)
+		}
+		t.Log("StatefulSet created with 1 replica")
+	})
+
+	t.Run("HeadlessServiceCreated", func(t *testing.T) {
+		var svc corev1.Service
+		headlessKey := types.NamespacedName{Name: srvKey.Name + "-headless", Namespace: srvKey.Namespace}
+		err := wait.PollUntilContextTimeout(ctx, pollInterval, 30*time.Second, true, func(ctx context.Context) (bool, error) {
+			if err := k8sClient.Get(ctx, headlessKey, &svc); err != nil {
+				return false, nil
+			}
+			return svc.Spec.ClusterIP == "None", nil
+		})
+		if err != nil {
+			t.Fatalf("Headless Service was not created: %v", err)
+		}
+		t.Log("Headless Service created")
+	})
+
+	t.Run("ClientServiceCreated", func(t *testing.T) {
+		var svc corev1.Service
+		clientKey := types.NamespacedName{Name: srvKey.Name, Namespace: srvKey.Namespace}
+		err := wait.PollUntilContextTimeout(ctx, pollInterval, 30*time.Second, true, func(ctx context.Context) (bool, error) {
+			if err := k8sClient.Get(ctx, clientKey, &svc); err != nil {
+				return false, nil
+			}
+			return svc.Spec.Type == corev1.ServiceTypeClusterIP, nil
+		})
+		if err != nil {
+			t.Fatalf("Client Service was not created: %v", err)
+		}
+		// Verify port
+		found := false
+		for _, p := range svc.Spec.Ports {
+			if p.Port == 1433 {
+				found = true
+			}
+		}
+		if !found {
+			t.Error("Expected client Service to expose port 1433")
+		}
+		t.Log("Client Service created with port 1433")
+	})
+
+	t.Run("SQLServerBecomesReady", func(t *testing.T) {
+		// Wait for StatefulSet pods to be ready first
+		stsKey := types.NamespacedName{Name: srvKey.Name, Namespace: srvKey.Namespace}
+		err := wait.PollUntilContextTimeout(ctx, pollInterval, 3*time.Minute, true, func(ctx context.Context) (bool, error) {
+			var sts appsv1.StatefulSet
+			if err := k8sClient.Get(ctx, stsKey, &sts); err != nil {
+				return false, nil
+			}
+			return sts.Status.ReadyReplicas >= 1, nil
+		})
+		if err != nil {
+			t.Fatalf("StatefulSet pods did not become ready: %v", err)
+		}
+
+		// Wait for SQLServer CR to become Ready
+		waitForReady(t, srvKey, &mssqlv1.SQLServer{})
+
+		var srv mssqlv1.SQLServer
+		if err := k8sClient.Get(ctx, srvKey, &srv); err != nil {
+			t.Fatalf("Failed to get SQLServer: %v", err)
+		}
+
+		// Verify status fields
+		if srv.Status.ServerVersion == "" {
+			t.Error("Expected serverVersion to be set")
+		}
+		if srv.Status.Edition == "" {
+			t.Error("Expected edition to be set")
+		}
+		expectedHost := fmt.Sprintf("%s.%s.svc.cluster.local", srvKey.Name, srvKey.Namespace)
+		if srv.Status.Host != expectedHost {
+			t.Errorf("Expected host=%s, got %s", expectedHost, srv.Status.Host)
+		}
+		if srv.Status.ReadyReplicas == nil || *srv.Status.ReadyReplicas != 1 {
+			t.Errorf("Expected readyReplicas=1, got %v", srv.Status.ReadyReplicas)
+		}
+		t.Logf("Managed standalone SQLServer ready: version=%s edition=%s host=%s",
+			srv.Status.ServerVersion, srv.Status.Edition, srv.Status.Host)
+	})
+
+	t.Run("DatabaseViaSQLServerRef", func(t *testing.T) {
+		// Create a Database CR referencing the managed SQLServer
+		dbKey := types.NamespacedName{Name: "managed-db-test", Namespace: testNamespace}
+		db := &mssqlv1.Database{
+			ObjectMeta: metav1.ObjectMeta{Name: dbKey.Name, Namespace: dbKey.Namespace},
+			Spec: mssqlv1.DatabaseSpec{
+				Server: mssqlv1.ServerReference{
+					SQLServerRef:      ptr(srvKey.Name),
+					CredentialsSecret: mssqlv1.SecretReference{Name: "unused-placeholder"},
+				},
+				DatabaseName:   "manageddbtest",
+				DeletionPolicy: ptr(mssqlv1.DeletionPolicyDelete),
+			},
+		}
+		if err := k8sClient.Create(ctx, db); err != nil {
+			t.Fatalf("Failed to create Database: %v", err)
+		}
+		waitForReady(t, dbKey, &mssqlv1.Database{})
+		t.Log("Database created on managed SQLServer via sqlServerRef")
+
+		// Cleanup
+		_ = k8sClient.Delete(ctx, db)
+		waitForDeletion(t, dbKey, &mssqlv1.Database{}, pollTimeout)
+	})
+
+	t.Run("Idempotent", func(t *testing.T) {
+		// Verify the CR stays Ready after multiple reconcile loops
+		time.Sleep(5 * time.Second) // Let a few reconcile cycles run
+		var srv mssqlv1.SQLServer
+		if err := k8sClient.Get(ctx, srvKey, &srv); err != nil {
+			t.Fatalf("Failed to get SQLServer: %v", err)
+		}
+		cond := findCondition(&srv, mssqlv1.ConditionReady)
+		if cond == nil || cond.Status != metav1.ConditionTrue {
+			t.Error("Expected SQLServer to remain Ready")
+		}
+	})
+
+	t.Run("OwnerReferencesOnResources", func(t *testing.T) {
+		// Verify StatefulSet, headless Service, and client Service have owner references
+		for _, name := range []string{srvKey.Name, srvKey.Name + "-headless"} {
+			var svc corev1.Service
+			if err := k8sClient.Get(ctx, types.NamespacedName{Name: name, Namespace: srvKey.Namespace}, &svc); err != nil {
+				t.Fatalf("Failed to get Service %s: %v", name, err)
+			}
+			hasOwner := false
+			for _, ref := range svc.OwnerReferences {
+				if ref.Kind == "SQLServer" && ref.Name == srvKey.Name {
+					hasOwner = true
+				}
+			}
+			if !hasOwner {
+				t.Errorf("Service %s missing owner reference to SQLServer", name)
+			}
+		}
+		var sts appsv1.StatefulSet
+		if err := k8sClient.Get(ctx, types.NamespacedName{Name: srvKey.Name, Namespace: srvKey.Namespace}, &sts); err != nil {
+			t.Fatalf("Failed to get StatefulSet: %v", err)
+		}
+		hasOwner := false
+		for _, ref := range sts.OwnerReferences {
+			if ref.Kind == "SQLServer" && ref.Name == srvKey.Name {
+				hasOwner = true
+			}
+		}
+		if !hasOwner {
+			t.Error("StatefulSet missing owner reference to SQLServer")
+		}
+	})
+
+	t.Run("Cleanup", func(t *testing.T) {
+		_ = k8sClient.Delete(ctx, &mssqlv1.SQLServer{
+			ObjectMeta: metav1.ObjectMeta{Name: srvKey.Name, Namespace: srvKey.Namespace},
+		})
+		waitForDeletion(t, srvKey, &mssqlv1.SQLServer{}, pollTimeout)
+
+		// Verify cascade deletion of StatefulSet
+		err := wait.PollUntilContextTimeout(ctx, pollInterval, 30*time.Second, true, func(ctx context.Context) (bool, error) {
+			var sts appsv1.StatefulSet
+			err := k8sClient.Get(ctx, types.NamespacedName{Name: srvKey.Name, Namespace: srvKey.Namespace}, &sts)
+			return errors.IsNotFound(err), nil
+		})
+		if err != nil {
+			t.Error("StatefulSet was not garbage collected after SQLServer deletion")
+		}
+		t.Log("Managed SQLServer and child resources cleaned up")
+	})
+}
+
+// TestE2EManagedSQLServer_Cluster tests a managed SQLServer CR with 2 replicas,
+// HADR enabled, certificate provisioning, AG creation, and auto-failover.
+func TestE2EManagedSQLServer_Cluster(t *testing.T) {
+	srvKey := types.NamespacedName{Name: "managed-cluster", Namespace: testNamespace}
+
+	t.Run("CreateManagedCluster", func(t *testing.T) {
+		srv := &mssqlv1.SQLServer{
+			ObjectMeta: metav1.ObjectMeta{Name: srvKey.Name, Namespace: srvKey.Namespace},
+			Spec: mssqlv1.SQLServerSpec{
+				CredentialsSecret: &mssqlv1.CrossNamespaceSecretReference{
+					Name: "mssql-sa-credentials",
+				},
+				Instance: &mssqlv1.InstanceSpec{
+					AcceptEULA:       true,
+					Image:            ptr(sqlImage),
+					Edition:          ptr("Developer"),
+					SAPasswordSecret: mssqlv1.SecretReference{Name: "mssql-sa-password"},
+					Replicas:         ptr(int32(2)),
+					StorageSize:      ptr("1Gi"),
+					Resources: &corev1.ResourceRequirements{
+						Requests: corev1.ResourceList{
+							corev1.ResourceMemory: resource.MustParse("512Mi"),
+							corev1.ResourceCPU:    resource.MustParse("250m"),
+						},
+						Limits: corev1.ResourceList{
+							corev1.ResourceMemory: resource.MustParse("2Gi"),
+						},
+					},
+					Certificates: &mssqlv1.CertificateSpec{
+						Mode: ptr(mssqlv1.CertificateModeSelfSigned),
+					},
+					AvailabilityGroup: &mssqlv1.ManagedAGSpec{
+						AGName:              ptr("managedclusterag"),
+						AvailabilityMode:    ptr("SynchronousCommit"),
+						AutoFailover:        ptr(true),
+						HealthCheckInterval: ptr("5s"),
+						FailoverCooldown:    ptr("30s"),
+					},
+				},
+			},
+		}
+		if err := k8sClient.Create(ctx, srv); err != nil {
+			t.Fatalf("Failed to create managed cluster SQLServer CR: %v", err)
+		}
+	})
+
+	t.Run("StatefulSetWith2Replicas", func(t *testing.T) {
+		stsKey := types.NamespacedName{Name: srvKey.Name, Namespace: srvKey.Namespace}
+		err := wait.PollUntilContextTimeout(ctx, pollInterval, pollTimeout, true, func(ctx context.Context) (bool, error) {
+			var sts appsv1.StatefulSet
+			if err := k8sClient.Get(ctx, stsKey, &sts); err != nil {
+				return false, nil
+			}
+			return sts.Spec.Replicas != nil && *sts.Spec.Replicas == 2, nil
+		})
+		if err != nil {
+			t.Fatalf("StatefulSet with 2 replicas was not created: %v", err)
+		}
+
+		// Verify HADR port is exposed
+		var sts appsv1.StatefulSet
+		if err := k8sClient.Get(ctx, stsKey, &sts); err != nil {
+			t.Fatalf("Failed to get StatefulSet: %v", err)
+		}
+		hasHADR := false
+		for _, p := range sts.Spec.Template.Spec.Containers[0].Ports {
+			if p.ContainerPort == 5022 && p.Name == "hadr" {
+				hasHADR = true
+			}
+		}
+		if !hasHADR {
+			t.Error("Expected StatefulSet to expose HADR port 5022")
+		}
+
+		// Verify MSSQL_ENABLE_HADR env var is set
+		hasHADREnv := false
+		for _, e := range sts.Spec.Template.Spec.Containers[0].Env {
+			if e.Name == "MSSQL_ENABLE_HADR" && e.Value == "1" {
+				hasHADREnv = true
+			}
+		}
+		if !hasHADREnv {
+			t.Error("Expected MSSQL_ENABLE_HADR=1 env var on StatefulSet")
+		}
+		t.Log("StatefulSet created with 2 replicas, HADR port and env configured")
+	})
+
+	t.Run("HeadlessServiceWithHADRPort", func(t *testing.T) {
+		headlessKey := types.NamespacedName{Name: srvKey.Name + "-headless", Namespace: srvKey.Namespace}
+		var svc corev1.Service
+		err := wait.PollUntilContextTimeout(ctx, pollInterval, 30*time.Second, true, func(ctx context.Context) (bool, error) {
+			if err := k8sClient.Get(ctx, headlessKey, &svc); err != nil {
+				return false, nil
+			}
+			return svc.Spec.ClusterIP == "None", nil
+		})
+		if err != nil {
+			t.Fatalf("Headless Service was not created: %v", err)
+		}
+
+		// Verify HADR port
+		hasHADR := false
+		for _, p := range svc.Spec.Ports {
+			if p.Port == 5022 && p.Name == "hadr" {
+				hasHADR = true
+			}
+		}
+		if !hasHADR {
+			t.Error("Expected headless Service to expose HADR port 5022")
+		}
+		t.Log("Headless Service with HADR port created")
+	})
+
+	t.Run("CertificateSecretsCreated", func(t *testing.T) {
+		// Wait for certificate secrets: CA + 2 per-replica certs
+		caKey := types.NamespacedName{Name: srvKey.Name + "-ca", Namespace: srvKey.Namespace}
+		err := wait.PollUntilContextTimeout(ctx, pollInterval, pollTimeout, true, func(ctx context.Context) (bool, error) {
+			var s corev1.Secret
+			return k8sClient.Get(ctx, caKey, &s) == nil, nil
+		})
+		if err != nil {
+			t.Fatalf("CA certificate secret was not created: %v", err)
+		}
+
+		for i := 0; i < 2; i++ {
+			certKey := types.NamespacedName{
+				Name:      fmt.Sprintf("%s-cert-%d", srvKey.Name, i),
+				Namespace: srvKey.Namespace,
+			}
+			err := wait.PollUntilContextTimeout(ctx, pollInterval, pollTimeout, true, func(ctx context.Context) (bool, error) {
+				var s corev1.Secret
+				if err := k8sClient.Get(ctx, certKey, &s); err != nil {
+					return false, nil
+				}
+				// Verify cert and key are present
+				return len(s.Data["tls.crt"]) > 0 && len(s.Data["tls.key"]) > 0, nil
+			})
+			if err != nil {
+				t.Fatalf("Certificate secret for replica %d was not created: %v", i, err)
+			}
+		}
+
+		// Verify CertificatesReady in status
+		var srv mssqlv1.SQLServer
+		err = wait.PollUntilContextTimeout(ctx, pollInterval, pollTimeout, true, func(ctx context.Context) (bool, error) {
+			if err := k8sClient.Get(ctx, srvKey, &srv); err != nil {
+				return false, nil
+			}
+			return srv.Status.CertificatesReady != nil && *srv.Status.CertificatesReady, nil
+		})
+		if err != nil {
+			t.Fatalf("CertificatesReady was not set to true: %v", err)
+		}
+		t.Log("CA and per-replica certificate secrets created, CertificatesReady=true")
+	})
+
+	t.Run("BothReplicasReady", func(t *testing.T) {
+		// Wait for both StatefulSet replicas to become ready
+		stsKey := types.NamespacedName{Name: srvKey.Name, Namespace: srvKey.Namespace}
+		err := wait.PollUntilContextTimeout(ctx, pollInterval, 4*time.Minute, true, func(ctx context.Context) (bool, error) {
+			var sts appsv1.StatefulSet
+			if err := k8sClient.Get(ctx, stsKey, &sts); err != nil {
+				return false, nil
+			}
+			return sts.Status.ReadyReplicas >= 2, nil
+		})
+		if err != nil {
+			t.Fatalf("StatefulSet pods did not all become ready: %v", err)
+		}
+
+		// Wait for SQL to accept connections on both pods
+		for _, pod := range []string{srvKey.Name + "-0", srvKey.Name + "-1"} {
+			t.Logf("Waiting for %s to accept SQL connections...", pod)
+			err := wait.PollUntilContextTimeout(ctx, 3*time.Second, 90*time.Second, true, func(ctx context.Context) (bool, error) {
+				cmd := exec.CommandContext(ctx, "kubectl", "exec", pod, "-n", testNamespace,
+					"--", "/opt/mssql-tools18/bin/sqlcmd",
+					"-S", "localhost", "-U", "sa", "-P", saPassword,
+					"-Q", "SELECT 1", "-C", "-No")
+				return cmd.Run() == nil, nil
+			})
+			if err != nil {
+				t.Fatalf("Pod %s did not accept SQL connections: %v", pod, err)
+			}
+		}
+		t.Log("Both replicas ready and accepting SQL connections")
+	})
+
+	t.Run("SQLServerBecomesReady", func(t *testing.T) {
+		waitForReady(t, srvKey, &mssqlv1.SQLServer{})
+
+		var srv mssqlv1.SQLServer
+		if err := k8sClient.Get(ctx, srvKey, &srv); err != nil {
+			t.Fatalf("Failed to get SQLServer: %v", err)
+		}
+
+		if srv.Status.ServerVersion == "" {
+			t.Error("Expected serverVersion to be set")
+		}
+		if srv.Status.ReadyReplicas == nil || *srv.Status.ReadyReplicas != 2 {
+			t.Errorf("Expected readyReplicas=2, got %v", srv.Status.ReadyReplicas)
+		}
+		if srv.Status.PrimaryReplica == "" {
+			t.Error("Expected primaryReplica to be set")
+		}
+		t.Logf("Managed cluster SQLServer ready: version=%s primary=%s readyReplicas=%d",
+			srv.Status.ServerVersion, srv.Status.PrimaryReplica, *srv.Status.ReadyReplicas)
+	})
+
+	t.Run("AutoFailover", func(t *testing.T) {
+		// Get current primary
+		var srv mssqlv1.SQLServer
+		if err := k8sClient.Get(ctx, srvKey, &srv); err != nil {
+			t.Fatalf("Failed to get SQLServer: %v", err)
+		}
+		originalPrimary := srv.Status.PrimaryReplica
+		t.Logf("Current primary: %s", originalPrimary)
+
+		// Determine primary pod name (e.g. managed-cluster-0)
+		primaryPod := srvKey.Name + "-0"
+		expectedNewPrimary := srvKey.Name + "-1"
+		if strings.Contains(originalPrimary, "-1") {
+			primaryPod = srvKey.Name + "-1"
+			expectedNewPrimary = srvKey.Name + "-0"
+		}
+
+		// Shut down SQL Server on the primary pod
+		t.Logf("Shutting down SQL Server on primary pod %s...", primaryPod)
+		cmd := exec.CommandContext(ctx, "kubectl", "exec", primaryPod, "-n", testNamespace, "--",
+			"/opt/mssql-tools18/bin/sqlcmd", "-S", "localhost", "-U", "sa", "-P", saPassword,
+			"-Q", "SHUTDOWN WITH NOWAIT", "-C", "-No")
+		_ = cmd.Run() // ignore error — connection drops on shutdown
+
+		// Wait for auto-failover: the other replica should become primary
+		t.Log("Waiting for auto-failover...")
+		err := wait.PollUntilContextTimeout(ctx, 3*time.Second, 2*time.Minute, true, func(ctx context.Context) (bool, error) {
+			if err := k8sClient.Get(ctx, srvKey, &srv); err != nil {
+				return false, nil
+			}
+			// The primary replica should change to the other replica
+			return srv.Status.PrimaryReplica != "" &&
+				srv.Status.PrimaryReplica != originalPrimary &&
+				strings.Contains(srv.Status.PrimaryReplica, expectedNewPrimary), nil
+		})
+		if err != nil {
+			// Re-fetch for diagnostic
+			_ = k8sClient.Get(ctx, srvKey, &srv)
+			t.Fatalf("Auto-failover did not happen: primary is still %q (expected change from %q)",
+				srv.Status.PrimaryReplica, originalPrimary)
+		}
+
+		t.Logf("Auto-failover completed: new primary=%s (was %s)",
+			srv.Status.PrimaryReplica, originalPrimary)
+
+		// Wait for the old primary pod to restart and rejoin
+		t.Logf("Waiting for %s to restart...", primaryPod)
+		err = wait.PollUntilContextTimeout(ctx, 3*time.Second, 2*time.Minute, true, func(ctx context.Context) (bool, error) {
+			cmd := exec.CommandContext(ctx, "kubectl", "exec", primaryPod, "-n", testNamespace,
+				"--", "/opt/mssql-tools18/bin/sqlcmd",
+				"-S", "localhost", "-U", "sa", "-P", saPassword,
+				"-Q", "SELECT 1", "-C", "-No")
+			return cmd.Run() == nil, nil
+		})
+		if err != nil {
+			t.Logf("Warning: old primary pod %s did not restart in time (may be expected in CI)", primaryPod)
+		}
+	})
+
+	t.Run("Cleanup", func(t *testing.T) {
+		_ = k8sClient.Delete(ctx, &mssqlv1.SQLServer{
+			ObjectMeta: metav1.ObjectMeta{Name: srvKey.Name, Namespace: srvKey.Namespace},
+		})
+		waitForDeletion(t, srvKey, &mssqlv1.SQLServer{}, 2*time.Minute)
+
+		// Verify cascade deletion
+		err := wait.PollUntilContextTimeout(ctx, pollInterval, 30*time.Second, true, func(ctx context.Context) (bool, error) {
+			var sts appsv1.StatefulSet
+			err := k8sClient.Get(ctx, types.NamespacedName{Name: srvKey.Name, Namespace: srvKey.Namespace}, &sts)
+			return errors.IsNotFound(err), nil
+		})
+		if err != nil {
+			t.Error("StatefulSet was not garbage collected after cluster SQLServer deletion")
+		}
+
+		// Verify cert secrets are cleaned up via owner references
+		for _, name := range []string{srvKey.Name + "-ca", srvKey.Name + "-cert-0", srvKey.Name + "-cert-1"} {
+			err := wait.PollUntilContextTimeout(ctx, pollInterval, 30*time.Second, true, func(ctx context.Context) (bool, error) {
+				var s corev1.Secret
+				err := k8sClient.Get(ctx, types.NamespacedName{Name: name, Namespace: srvKey.Namespace}, &s)
+				return errors.IsNotFound(err), nil
+			})
+			if err != nil {
+				t.Errorf("Certificate secret %s was not garbage collected", name)
+			}
+		}
+		t.Log("Managed cluster SQLServer and all child resources cleaned up")
+	})
+}
+
 // --- AG Infrastructure helpers ---
 
 func deployAGInfrastructure(t *testing.T) {
