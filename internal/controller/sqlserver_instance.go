@@ -3,6 +3,7 @@ package controller
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -145,6 +146,70 @@ func (r *SQLServerReconciler) isStatefulSetReady(ctx context.Context, srv *v1alp
 	return sts.Status.ReadyReplicas >= desired, sts.Status.ReadyReplicas, nil
 }
 
+// reconcileConfigMap ensures the mssql.conf ConfigMap exists and is up to date.
+func (r *SQLServerReconciler) reconcileConfigMap(ctx context.Context, srv *v1alpha1.SQLServer) error {
+	desired := r.desiredConfigMap(srv)
+	if err := controllerutil.SetControllerReference(srv, desired, r.Scheme); err != nil {
+		return err
+	}
+
+	var existing corev1.ConfigMap
+	err := r.Get(ctx, types.NamespacedName{Name: desired.Name, Namespace: desired.Namespace}, &existing)
+	if apierrors.IsNotFound(err) {
+		return r.Create(ctx, desired)
+	}
+	if err != nil {
+		return err
+	}
+
+	if existing.Data["mssql.conf"] != desired.Data["mssql.conf"] {
+		existing.Data = desired.Data
+		return r.Update(ctx, &existing)
+	}
+	return nil
+}
+
+// desiredConfigMap builds the mssql.conf ConfigMap from the instance spec.
+func (r *SQLServerReconciler) desiredConfigMap(srv *v1alpha1.SQLServer) *corev1.ConfigMap {
+	return &corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      srv.Name + "-config",
+			Namespace: srv.Namespace,
+			Labels:    instanceLabels(srv),
+		},
+		Data: map[string]string{
+			"mssql.conf": buildMSSQLConf(srv),
+		},
+	}
+}
+
+// buildMSSQLConf generates the mssql.conf content.
+// It uses the raw user config and auto-appends memorylimitmb if not present.
+func buildMSSQLConf(srv *v1alpha1.SQLServer) string {
+	inst := srv.Spec.Instance
+
+	conf := ""
+	if inst.Config != nil {
+		conf = *inst.Config
+	}
+
+	// Auto-append memorylimitmb if not set and memory limit is defined
+	if !strings.Contains(conf, "memorylimitmb") && inst.Resources != nil {
+		if memLimit, ok := inst.Resources.Limits[corev1.ResourceMemory]; ok {
+			memMB := memLimit.Value() / (1024 * 1024)
+			autoLimit := memMB * 80 / 100
+			if autoLimit > 0 {
+				if !strings.Contains(conf, "[memory]") {
+					conf += "\n[memory]\n"
+				}
+				conf += fmt.Sprintf("memorylimitmb = %d\n", autoLimit)
+			}
+		}
+	}
+
+	return conf
+}
+
 func (r *SQLServerReconciler) desiredStatefulSet(srv *v1alpha1.SQLServer) *appsv1.StatefulSet {
 	inst := srv.Spec.Instance
 	labels := instanceLabels(srv)
@@ -189,6 +254,7 @@ func (r *SQLServerReconciler) desiredStatefulSet(srv *v1alpha1.SQLServer) *appsv
 		},
 		VolumeMounts: []corev1.VolumeMount{
 			{Name: "mssql-data", MountPath: "/var/opt/mssql"},
+			{Name: "mssql-config", MountPath: "/var/opt/mssql/mssql.conf", SubPath: "mssql.conf", ReadOnly: true},
 		},
 		ReadinessProbe: &corev1.Probe{
 			ProbeHandler: corev1.ProbeHandler{
@@ -206,7 +272,16 @@ func (r *SQLServerReconciler) desiredStatefulSet(srv *v1alpha1.SQLServer) *appsv
 		},
 	}
 
-	var volumes []corev1.Volume
+	volumes := []corev1.Volume{
+		{
+			Name: "mssql-config",
+			VolumeSource: corev1.VolumeSource{
+				ConfigMap: &corev1.ConfigMapVolumeSource{
+					LocalObjectReference: corev1.LocalObjectReference{Name: srv.Name + "-config"},
+				},
+			},
+		},
+	}
 	if replicas > 1 {
 		container.Ports = append(container.Ports, corev1.ContainerPort{
 			Name: "hadr", ContainerPort: hadrEndpointPort,

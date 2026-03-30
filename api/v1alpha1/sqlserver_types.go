@@ -110,6 +110,18 @@ type InstanceSpec struct {
 	// +optional
 	TopologySpreadConstraints []corev1.TopologySpreadConstraint `json:"topologySpreadConstraints,omitempty"`
 
+	// Config is the raw mssql.conf content in INI format.
+	// If memory.memorylimitmb is not set and resources.limits.memory is defined,
+	// the operator auto-appends it at 80% of the container memory limit.
+	// Example:
+	//   config: |
+	//     [memory]
+	//     memorylimitmb = 4096
+	//     [network]
+	//     forceencryption = 1
+	// +optional
+	Config *string `json:"config,omitempty"`
+
 	// Certificates configures TLS certificate management for HADR endpoints.
 	// Required when replicas > 1. Ignored when replicas == 1.
 	// +optional

@@ -918,6 +918,11 @@ func (in *InstanceSpec) DeepCopyInto(out *InstanceSpec) {
 			(*in)[i].DeepCopyInto(&(*out)[i])
 		}
 	}
+	if in.Config != nil {
+		in, out := &in.Config, &out.Config
+		*out = new(string)
+		**out = **in
+	}
 	if in.Certificates != nil {
 		in, out := &in.Certificates, &out.Certificates
 		*out = new(CertificateSpec)

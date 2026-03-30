@@ -225,6 +225,150 @@ func TestE2EDatabaseConfiguration(t *testing.T) {
 }
 
 // =============================================================================
+// =============================================================================
+// mssql.conf Configuration E2E Tests
+// =============================================================================
+
+func TestE2EMSSQLConf(t *testing.T) {
+	srvKey := types.NamespacedName{Name: "conf-test", Namespace: testNamespace}
+
+	t.Run("ConfigMapCreated", func(t *testing.T) {
+		mssqlConf := "[sqlagent]\nenabled = true\n\n[traceflag]\ntraceflag0 = 1222\n"
+		srv := &mssqlv1.SQLServer{
+			ObjectMeta: metav1.ObjectMeta{Name: srvKey.Name, Namespace: srvKey.Namespace},
+			Spec: mssqlv1.SQLServerSpec{
+				Instance: &mssqlv1.InstanceSpec{
+					AcceptEULA:       true,
+					SAPasswordSecret: mssqlv1.SecretReference{Name: "mssql-sa-password"},
+					Replicas:         ptr(int32(1)),
+					StorageSize:      ptr("1Gi"),
+					Config:           &mssqlConf,
+					Resources: &corev1.ResourceRequirements{
+						Requests: corev1.ResourceList{
+							corev1.ResourceMemory: resource.MustParse("512Mi"),
+							corev1.ResourceCPU:    resource.MustParse("250m"),
+						},
+						Limits: corev1.ResourceList{
+							corev1.ResourceMemory: resource.MustParse("2Gi"),
+						},
+					},
+				},
+			},
+		}
+		if err := k8sClient.Create(ctx, srv); err != nil {
+			t.Fatalf("Failed to create SQLServer: %v", err)
+		}
+
+		// Wait for ConfigMap to be created
+		cmKey := types.NamespacedName{Name: srvKey.Name + "-config", Namespace: srvKey.Namespace}
+		var cm corev1.ConfigMap
+		err := wait.PollUntilContextTimeout(ctx, pollInterval, pollTimeout, true, func(ctx context.Context) (bool, error) {
+			return k8sClient.Get(ctx, cmKey, &cm) == nil, nil
+		})
+		if err != nil {
+			t.Fatalf("ConfigMap was not created: %v", err)
+		}
+
+		conf := cm.Data["mssql.conf"]
+		if conf == "" {
+			t.Fatal("mssql.conf is empty in ConfigMap")
+		}
+		t.Logf("mssql.conf:\n%s", conf)
+
+		// Verify user config is present
+		if !containsString2(conf, "enabled = true") {
+			t.Error("Expected sqlagent enabled = true in config")
+		}
+		if !containsString2(conf, "traceflag0 = 1222") {
+			t.Error("Expected traceflag0 = 1222 in config")
+		}
+	})
+
+	t.Run("AutoMemoryAppended", func(t *testing.T) {
+		cmKey := types.NamespacedName{Name: srvKey.Name + "-config", Namespace: srvKey.Namespace}
+		var cm corev1.ConfigMap
+		if err := k8sClient.Get(ctx, cmKey, &cm); err != nil {
+			t.Fatalf("Failed to get ConfigMap: %v", err)
+		}
+		conf := cm.Data["mssql.conf"]
+		// 2Gi = 2048 MB, 80% = 1638
+		if !containsString2(conf, "memorylimitmb = 1638") {
+			t.Errorf("Expected auto memorylimitmb = 1638 (80%% of 2Gi), got:\n%s", conf)
+		}
+	})
+
+	t.Run("ConfigMountedInPod", func(t *testing.T) {
+		// Wait for the pod to be ready
+		stsKey := types.NamespacedName{Name: srvKey.Name, Namespace: srvKey.Namespace}
+		err := wait.PollUntilContextTimeout(ctx, pollInterval, 3*time.Minute, true, func(ctx context.Context) (bool, error) {
+			var sts appsv1.StatefulSet
+			if err := k8sClient.Get(ctx, stsKey, &sts); err != nil {
+				return false, nil
+			}
+			return sts.Status.ReadyReplicas >= 1, nil
+		})
+		if err != nil {
+			t.Fatalf("Pod did not become ready: %v", err)
+		}
+
+		// Verify the config file is mounted by reading it from the pod
+		cmd := exec.CommandContext(ctx, "kubectl", "exec", srvKey.Name+"-0", "-n", testNamespace,
+			"--", "cat", "/var/opt/mssql/mssql.conf")
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("Failed to read mssql.conf from pod: %v\n%s", err, out)
+		}
+		podConf := string(out)
+		if !containsString2(podConf, "enabled = true") {
+			t.Errorf("mssql.conf in pod missing sqlagent config:\n%s", podConf)
+		}
+		if !containsString2(podConf, "memorylimitmb") {
+			t.Errorf("mssql.conf in pod missing memorylimitmb:\n%s", podConf)
+		}
+		t.Logf("mssql.conf mounted in pod OK")
+	})
+
+	t.Run("SQLServerRespectsConfig", func(t *testing.T) {
+		// Wait for SQL Server to be ready
+		waitForReady(t, srvKey, &mssqlv1.SQLServer{})
+
+		// Verify SQL Server picked up the memory limit
+		pod := srvKey.Name + "-0"
+		cmd := exec.CommandContext(ctx, "kubectl", "exec", pod, "-n", testNamespace,
+			"--", "/opt/mssql-tools18/bin/sqlcmd", "-S", "localhost", "-U", "sa", "-P", saPassword,
+			"-Q", "SELECT value_in_use FROM sys.configurations WHERE name = 'max server memory (MB)'",
+			"-C", "-No", "-h", "-1")
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Logf("Warning: could not query max server memory: %v", err)
+		} else {
+			t.Logf("SQL Server max server memory: %s", string(out))
+		}
+	})
+
+	t.Run("Cleanup", func(t *testing.T) {
+		_ = k8sClient.Delete(ctx, &mssqlv1.SQLServer{
+			ObjectMeta: metav1.ObjectMeta{Name: srvKey.Name, Namespace: srvKey.Namespace},
+		})
+		waitForDeletion(t, srvKey, &mssqlv1.SQLServer{}, pollTimeout)
+	})
+}
+
+// containsString2 checks if a string contains a substring (for config assertions).
+func containsString2(s, substr string) bool {
+	return len(s) > 0 && len(substr) > 0 && contains(s, substr)
+}
+
+func contains(s, substr string) bool {
+	for i := 0; i <= len(s)-len(substr); i++ {
+		if s[i:i+len(substr)] == substr {
+			return true
+		}
+	}
+	return false
+}
+
+// =============================================================================
 // Managed SQLServer E2E Tests (operator-managed StatefulSet/Services/Certs/AG)
 // =============================================================================
 

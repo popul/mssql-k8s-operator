@@ -78,6 +78,7 @@ Defines a SQL Server connection. In **managed mode** (`spec.instance` is set), t
 | `tolerations` | `[]Toleration` | no | | no | Pod tolerations |
 | `affinity` | `*Affinity` | no | | no | Pod affinity/anti-affinity |
 | `topologySpreadConstraints` | `[]TopologySpreadConstraint` | no | | no | Topology spread |
+| `config` | `*string` | no | auto memory | no | Raw `mssql.conf` in INI format. See [configuring SQL Server](../how-to/deploy-sql-server.md#configuring-sql-server-mssqlconf). If `memorylimitmb` is omitted and `resources.limits.memory` is set, the operator auto-appends it at 80% of the limit. |
 | `certificates` | `*CertificateSpec` | no | | no | HADR certificate config (required for replicas > 1) |
 | `availabilityGroup` | `*ManagedAGSpec` | no | | no | AG config (for replicas > 1) |
 

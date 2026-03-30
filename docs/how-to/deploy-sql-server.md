@@ -142,6 +142,54 @@ sqlcmd -S localhost -U sa -P 'YourStr0ngP@ssword!' -d myapp
 | `availabilityGroup.agName` | `{name}-ag` | AG name on SQL Server |
 | `availabilityGroup.availabilityMode` | `SynchronousCommit` | Sync mode |
 | `availabilityGroup.autoFailover` | `true` | Operator-managed failover |
+| `config` | auto memory | Raw `mssql.conf` content ([see section](#configuring-sql-server-mssqlconf)) |
+
+## Configuring SQL Server (mssql.conf)
+
+The `config` field accepts raw `mssql.conf` content in INI format:
+
+```yaml
+spec:
+  instance:
+    config: |
+      [memory]
+      memorylimitmb = 4096
+
+      [network]
+      forceencryption = 1
+
+      [traceflag]
+      traceflag0 = 1222
+      traceflag1 = 3226
+    resources:
+      limits:
+        memory: 8Gi
+```
+
+The operator creates a ConfigMap and mounts it as `/var/opt/mssql/mssql.conf`.
+
+### Auto-calculated memory limit
+
+If `memorylimitmb` is not set but `resources.limits.memory` is defined, the operator automatically sets it to **80% of the container memory limit**. This prevents SQL Server from consuming all available memory and getting OOMKilled.
+
+For example, with `limits.memory: 4Gi`, the operator sets `memorylimitmb = 3276`.
+
+### Common options
+
+| Section | Key | Example | Description |
+|---|---|---|---|
+| `[memory]` | `memorylimitmb` | `4096` | Max memory in MB (auto-set if omitted) |
+| `[network]` | `forceencryption` | `1` | Force TLS for all connections |
+| `[network]` | `tcpport` | `1433` | TCP listen port |
+| `[sqlagent]` | `enabled` | `true` | Enable SQL Server Agent |
+| `[traceflag]` | `traceflag0` | `1222` | Deadlock monitoring |
+| `[traceflag]` | `traceflag1` | `3226` | Suppress backup log messages |
+| `[collation]` | `sqlcollation` | `Latin1_General_CI_AS` | Default instance collation |
+| `[filelocation]` | `defaultdatadir` | `/var/opt/mssql/data` | Default data file path |
+| `[filelocation]` | `defaultlogdir` | `/var/opt/mssql/log` | Default log file path |
+| `[filelocation]` | `defaultbackupdir` | `/var/opt/mssql/backup` | Default backup path |
+
+Full reference: [Microsoft docs](https://learn.microsoft.com/en-us/sql/linux/sql-server-linux-configure-mssql-conf).
 
 ## Exposing SQL Server outside the cluster
 
@@ -158,7 +206,7 @@ instance:
 
 | Topic | Recommendation |
 |---|---|
-| **Resources** | Always set memory limits. SQL Server uses all available memory by default |
+| **Resources** | Always set memory limits. The operator auto-sets `memorylimitmb` to 80% of the limit |
 | **Edition** | Set `edition` for production. See [version and edition guide](sql-server-version-edition.md) |
 | **TLS** | Enable TLS for production connections |
 | **Backups** | Use the operator's `ScheduledBackup` CR |

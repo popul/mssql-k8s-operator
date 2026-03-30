@@ -290,3 +290,28 @@ kubectl logs -l app.kubernetes.io/name=mssql-operator -n mssql-operator-system |
 | Express | Not supported |
 
 See [SQL Server version and edition guide](sql-server-version-edition.md) for details.
+
+## Tuning SQL Server for HA
+
+For production HA clusters, configure `mssql.conf` via the `config` field:
+
+```yaml
+spec:
+  instance:
+    config: |
+      [memory]
+      memorylimitmb = 6144
+
+      [sqlagent]
+      enabled = true
+
+      [traceflag]
+      traceflag0 = 1222
+    resources:
+      limits:
+        memory: 8Gi
+```
+
+If `memorylimitmb` is omitted, the operator auto-sets it to 80% of `resources.limits.memory`.
+
+See [Configuring SQL Server](deploy-sql-server.md#configuring-sql-server-mssqlconf) for the full option reference.

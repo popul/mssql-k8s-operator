@@ -93,6 +93,9 @@ func (r *SQLServerReconciler) reconcileManaged(ctx context.Context, srv *v1alpha
 	}
 
 	// Phase 1: Infrastructure
+	if err := r.reconcileConfigMap(ctx, srv); err != nil {
+		return ctrl.Result{}, fmt.Errorf("failed to reconcile config: %w", err)
+	}
 	if err := r.reconcileHeadlessService(ctx, srv); err != nil {
 		return ctrl.Result{}, fmt.Errorf("failed to reconcile headless service: %w", err)
 	}

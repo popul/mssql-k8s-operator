@@ -1155,6 +1155,18 @@ spec:
                           certificates.
                         type: string
                     type: object
+                  config:
+                    description: |-
+                      Config is the raw mssql.conf content in INI format.
+                      If memory.memorylimitmb is not set and resources.limits.memory is defined,
+                      the operator auto-appends it at 80% of the container memory limit.
+                      Example:
+                        config: |
+                          [memory]
+                          memorylimitmb = 4096
+                          [network]
+                          forceencryption = 1
+                    type: string
                   edition:
                     default: Developer
                     description: Edition is the SQL Server PID (Developer, Express,

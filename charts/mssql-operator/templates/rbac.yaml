@@ -15,7 +15,7 @@ rules:
     resources: ["databases/finalizers", "logins/finalizers", "databaseusers/finalizers", "schemas/finalizers", "permissions/finalizers", "backups/finalizers", "restores/finalizers", "scheduledbackups/finalizers", "sqlservers/finalizers", "availabilitygroups/finalizers", "agfailovers/finalizers"]
     verbs: ["update"]
   - apiGroups: [""]
-    resources: ["secrets", "persistentvolumeclaims"]
+    resources: ["secrets", "persistentvolumeclaims", "configmaps"]
     verbs: ["get", "list", "watch", "create", "update", "patch"]
   - apiGroups: [""]
     resources: ["services"]
