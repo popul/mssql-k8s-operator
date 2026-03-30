@@ -1175,7 +1175,7 @@ func (m *MockClient) GetServerVersion(_ context.Context) (string, error) {
 	if err := m.checkMethodError("GetServerVersion"); err != nil {
 		return "", err
 	}
-	return "16.0.4135.4", nil
+	return "2022 (16.0.4135.4)", nil
 }
 
 func (m *MockClient) GetServerEdition(_ context.Context) (string, error) {

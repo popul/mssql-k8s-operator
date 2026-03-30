@@ -859,7 +859,35 @@ func (c *MSSQLClient) GetServerVersion(ctx context.Context) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("failed to get server version: %w", err)
 	}
+	// e.g. "16.0.4245.2" → "2022 (16.0.4245.2)"
+	year := majorVersionToYear(version)
+	if year != "" {
+		return fmt.Sprintf("%s (%s)", year, version), nil
+	}
 	return version, nil
+}
+
+func majorVersionToYear(version string) string {
+	if len(version) < 2 {
+		return ""
+	}
+	major := version[:2]
+	switch major {
+	case "16":
+		return "2022"
+	case "15":
+		return "2019"
+	case "14":
+		return "2017"
+	case "13":
+		return "2016"
+	case "12":
+		return "2014"
+	case "11":
+		return "2012"
+	default:
+		return ""
+	}
 }
 
 func (c *MSSQLClient) GetServerEdition(ctx context.Context) (string, error) {
