@@ -1,6 +1,6 @@
 # Tutorial: Getting started with the MSSQL Operator
 
-In this tutorial you will install the MSSQL Kubernetes Operator, create a SQL Server database, a login, and a database user, all using declarative Kubernetes manifests. By the end, you will have a fully managed SQL Server setup.
+In this tutorial you will install the MSSQL Kubernetes Operator, deploy a SQL Server instance via the `SQLServer` CR, then create a database, a login, and a database user -- all declaratively. By the end, you will have a fully managed SQL Server setup running entirely in Kubernetes.
 
 ## Prerequisites
 
@@ -8,9 +8,8 @@ You need:
 
 - A running Kubernetes cluster (minikube, kind, or any 1.27+ cluster)
 - `kubectl` and `helm` installed
-- A SQL Server 2019+ instance accessible from inside the cluster (see [Deploy SQL Server in Kubernetes](../how-to/deploy-sql-server.md) if you don't have one)
 
-This tutorial uses `mssql.database.svc.cluster.local` as the SQL Server address. Replace it with your actual address.
+No external SQL Server is needed -- the operator deploys one for you.
 
 ## Step 1: Install the operator
 
@@ -33,17 +32,62 @@ NAME                              READY   STATUS    RESTARTS   AGE
 mssql-operator-6d4f8b7c9f-x2k4l  1/1     Running   0          30s
 ```
 
-## Step 2: Create a credentials Secret
-
-The operator needs credentials to connect to SQL Server. Create a Secret:
+## Step 2: Create Secrets
 
 ```bash
-kubectl create secret generic mssql-sa-credentials \
+# SA password for the SQL Server container
+kubectl create secret generic mssql-sa-password \
+  --from-literal=MSSQL_SA_PASSWORD='YourStr0ngP@ssword!'
+
+# Operator credentials (same password, used by the operator to connect)
+kubectl create secret generic sa-credentials \
   --from-literal=username=sa \
-  --from-literal=password='YourStrongPassword!'
+  --from-literal=password='YourStr0ngP@ssword!'
 ```
 
-## Step 3: Create a database
+## Step 3: Deploy SQL Server with the SQLServer CR
+
+Save this as `sqlserver.yaml`:
+
+```yaml
+apiVersion: mssql.popul.io/v1alpha1
+kind: SQLServer
+metadata:
+  name: mssql
+spec:
+  credentialsSecret:
+    name: sa-credentials
+  instance:
+    acceptEULA: true
+    saPasswordSecret:
+      name: mssql-sa-password
+    storageSize: 10Gi
+    resources:
+      requests:
+        memory: 2Gi
+        cpu: 500m
+      limits:
+        memory: 4Gi
+```
+
+Apply it:
+
+```bash
+kubectl apply -f sqlserver.yaml
+```
+
+The operator creates a StatefulSet, Services, and PVCs automatically. Watch it become ready:
+
+```bash
+kubectl get sqlsrv mssql -w
+```
+
+```
+NAME    HOST                                PORT   AUTH       READY   VERSION          AGE
+mssql   mssql.default.svc.cluster.local     1433   SqlLogin   True    16.0.4135.4      45s
+```
+
+## Step 4: Create a database
 
 Save this as `database.yaml`:
 
@@ -54,9 +98,7 @@ metadata:
   name: myapp-db
 spec:
   server:
-    host: mssql.database.svc.cluster.local
-    credentialsSecret:
-      name: mssql-sa-credentials
+    sqlServerRef: mssql
   databaseName: myapp
 ```
 
@@ -77,7 +119,7 @@ NAME       DATABASE   READY   AGE
 myapp-db   myapp      True    10s
 ```
 
-## Step 4: Create a login
+## Step 5: Create a login
 
 The login is a SQL Server authentication identity. Save this as `login.yaml`:
 
@@ -88,9 +130,7 @@ metadata:
   name: myapp-login
 spec:
   server:
-    host: mssql.database.svc.cluster.local
-    credentialsSecret:
-      name: mssql-sa-credentials
+    sqlServerRef: mssql
   loginName: myapp_user
   passwordSecret:
     name: myapp-login-password
@@ -116,7 +156,7 @@ NAME           LOGIN        READY   AGE
 myapp-login    myapp_user   True    10s
 ```
 
-## Step 5: Create a database user
+## Step 6: Create a database user
 
 The database user maps the login to the database. Save this as `dbuser.yaml`:
 
@@ -127,9 +167,7 @@ metadata:
   name: myapp-dbuser
 spec:
   server:
-    host: mssql.database.svc.cluster.local
-    credentialsSecret:
-      name: mssql-sa-credentials
+    sqlServerRef: mssql
   databaseName: myapp
   userName: myapp_user
   loginRef:
@@ -156,24 +194,17 @@ NAME           DATABASE   USER         READY   AGE
 myapp-dbuser   myapp      myapp_user   True    10s
 ```
 
-## Step 6: Verify on SQL Server
+## Step 7: Verify on SQL Server
 
 Connect to SQL Server and verify the objects were created:
 
 ```bash
-kubectl run test-sql --rm -it --image=mcr.microsoft.com/mssql-tools -- \
-  /opt/mssql-tools/bin/sqlcmd -S mssql.database.svc.cluster.local -U sa -P 'YourStrongPassword!'
+kubectl exec mssql-0 -- /opt/mssql-tools18/bin/sqlcmd \
+  -S localhost -U sa -P 'YourStr0ngP@ssword!' -C -No \
+  -Q "SELECT name FROM sys.databases WHERE name = 'myapp'; SELECT name FROM sys.server_principals WHERE name = 'myapp_user'"
 ```
 
-```sql
-SELECT name FROM sys.databases WHERE name = 'myapp';
-SELECT name FROM sys.server_principals WHERE name = 'myapp_user';
-USE myapp;
-SELECT name FROM sys.database_principals WHERE name = 'myapp_user';
-GO
-```
-
-## Step 7: Clean up
+## Step 8: Clean up
 
 Delete the resources in reverse order:
 
@@ -181,19 +212,22 @@ Delete the resources in reverse order:
 kubectl delete databaseuser myapp-dbuser
 kubectl delete login myapp-login
 kubectl delete database myapp-db
+kubectl delete sqlserver mssql
 ```
 
-By default, `deletionPolicy` is `Retain` -- the database and login are kept on SQL Server even after the CRs are deleted. To actually drop them, set `deletionPolicy: Delete` in the spec before deleting.
+By default, `deletionPolicy` is `Retain` -- the database and login are kept on SQL Server even after the CRs are deleted. To actually drop them, set `deletionPolicy: Delete` in the spec before deleting. When the `SQLServer` CR is deleted, the StatefulSet, Services, and PVCs are garbage-collected automatically.
 
 ## What you learned
 
-- The operator manages SQL Server objects through Kubernetes Custom Resources
+- The operator can **deploy SQL Server** via the `SQLServer` CR (no manual Deployment/StatefulSet needed)
+- Other CRs reference the SQL Server by name via `sqlServerRef`
 - Each CR reports its state via the `Ready` condition
-- Resources reference SQL Server credentials via Kubernetes Secrets
+- Resources reference credentials via Kubernetes Secrets
 - Deletion is safe by default (`Retain` policy)
 
 ## Next steps
 
+- [Deploy a HA cluster](../how-to/high-availability.md) with 3 replicas and auto-failover
 - [How to manage schemas and permissions](../how-to/manage-schemas-permissions.md)
 - [CRD reference](../reference/crds.md) for all available fields
 - [Architecture](../explanation/architecture.md) to understand how the operator works internally
