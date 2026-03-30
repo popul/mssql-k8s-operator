@@ -19,7 +19,7 @@ spec:
   scope: Namespaced
   versions:
   - additionalPrinterColumns:
-    - jsonPath: .spec.host
+    - jsonPath: .status.host
       name: Host
       type: string
     - jsonPath: .spec.port
