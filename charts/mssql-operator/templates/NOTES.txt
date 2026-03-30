@@ -8,23 +8,51 @@ To verify the operator is running:
 
   kubectl get pods -n {{ .Release.Namespace }} -l {{ include "mssql-operator.selectorLabels" . | replace ": " "=" | replace "\n" "," }}
 
-Create your first Database CR:
+Quick start -- deploy a managed SQL Server:
 
+  # Create secrets
+  kubectl create secret generic mssql-sa-password \
+    --from-literal=MSSQL_SA_PASSWORD='YourStr0ngP@ssword!'
+  kubectl create secret generic sa-credentials \
+    --from-literal=username=sa --from-literal=password='YourStr0ngP@ssword!'
+
+  # Deploy a SQL Server instance
+  cat <<EOF | kubectl apply -f -
+  apiVersion: mssql.popul.io/v1alpha1
+  kind: SQLServer
+  metadata:
+    name: mssql
+  spec:
+    credentialsSecret:
+      name: sa-credentials
+    instance:
+      acceptEULA: true
+      saPasswordSecret:
+        name: mssql-sa-password
+      storageSize: 10Gi
+  EOF
+
+  # Wait for it
+  kubectl get sqlsrv mssql -w
+
+  # Create a database
   cat <<EOF | kubectl apply -f -
   apiVersion: mssql.popul.io/v1alpha1
   kind: Database
   metadata:
-    name: my-database
+    name: myapp-db
   spec:
     server:
-      host: mssql.example.com
-      credentialsSecret:
-        name: sa-credentials
-    databaseName: MyDatabase
+      sqlServerRef: mssql
+    databaseName: myapp
   EOF
 
-List all MSSQL resources:
+Available CRDs: SQLServer, Database, Login, DatabaseUser, Schema,
+Permission, Backup, Restore, ScheduledBackup, AvailabilityGroup, AGFailover.
 
   kubectl get mssql
 
-For more information, visit the project documentation.
+Documentation:
+  - Deploy SQL Server:  docs/how-to/deploy-sql-server.md
+  - High availability:  docs/how-to/high-availability.md
+  - Full reference:     docs/reference/crds.md
