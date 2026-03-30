@@ -77,12 +77,11 @@ func (r *DatabaseReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 			fmt.Sprintf("Failed to resolve server reference: %v", err))
 	}
 
-	// 4. Read the credentials Secret
-	username, password, err := getCredentialsFromSecret(ctx, r.Client, db.Namespace, serverRef.CredentialsSecret.Name)
+	// 4. Read the credentials (supports fallback to saPasswordSecret in managed mode)
+	username, password, err := resolveServerCredentials(ctx, r.Client, db.Namespace, db.Spec.Server)
 	if err != nil {
 		if apierrors.IsNotFound(err) {
-			return r.setConditionAndReturn(ctx, &db, metav1.ConditionFalse, v1alpha1.ReasonSecretNotFound,
-				fmt.Sprintf("Secret %q not found", serverRef.CredentialsSecret.Name))
+			return r.setConditionAndReturn(ctx, &db, metav1.ConditionFalse, v1alpha1.ReasonSecretNotFound, err.Error())
 		}
 		return r.setConditionAndReturn(ctx, &db, metav1.ConditionFalse, v1alpha1.ReasonInvalidCredentialsSecret, err.Error())
 	}
@@ -241,11 +240,12 @@ func (r *DatabaseReconciler) handleDeletion(ctx context.Context, db *v1alpha1.Da
 	}
 
 	if policy == v1alpha1.DeletionPolicyDelete {
-		username, password, err := getCredentialsFromSecret(ctx, r.Client, db.Namespace, db.Spec.Server.CredentialsSecret.Name)
+		username, password, err := resolveServerCredentials(ctx, r.Client, db.Namespace, db.Spec.Server)
 		if err != nil {
 			logger.Error(err, "failed to get credentials for cleanup, removing finalizer anyway")
 		} else {
-			sqlClient, err := connectToSQL(db.Spec.Server, username, password, r.SQLClientFactory)
+			serverRef, _ := resolveServerReference(ctx, r.Client, db.Namespace, db.Spec.Server)
+			sqlClient, err := connectToSQL(serverRef, username, password, r.SQLClientFactory)
 			if err != nil {
 				logger.Error(err, "failed to connect to SQL Server for cleanup, removing finalizer anyway")
 			} else {

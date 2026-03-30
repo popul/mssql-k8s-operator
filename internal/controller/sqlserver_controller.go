@@ -220,22 +220,27 @@ func (r *SQLServerReconciler) reconcileExternal(ctx context.Context, srv *v1alph
 func (r *SQLServerReconciler) probeAndUpdateStatus(ctx context.Context, srv *v1alpha1.SQLServer, patch client.Patch, host string) (ctrl.Result, error) {
 	logger := log.FromContext(ctx)
 
-	// Read the credentials Secret
-	secretNS := srv.Namespace
-	if srv.Spec.CredentialsSecret != nil && srv.Spec.CredentialsSecret.Namespace != nil {
-		secretNS = *srv.Spec.CredentialsSecret.Namespace
-	}
+	// Read the credentials Secret.
+	// In managed mode, if credentialsSecret is not set, fall back to sa + saPasswordSecret.
+	var username, password string
+	var err error
 
-	if srv.Spec.CredentialsSecret == nil {
+	if srv.Spec.CredentialsSecret != nil {
+		secretNS := srv.Namespace
+		if srv.Spec.CredentialsSecret.Namespace != nil {
+			secretNS = *srv.Spec.CredentialsSecret.Namespace
+		}
+		username, password, err = getCredentialsFromSecret(ctx, r.Client, secretNS, srv.Spec.CredentialsSecret.Name)
+	} else if srv.Spec.Instance != nil {
+		// Managed mode fallback: use sa + saPasswordSecret
+		username, password, err = getCredentialsFromSAPasswordSecret(ctx, r.Client, srv.Namespace, srv.Spec.Instance.SAPasswordSecret.Name)
+	} else {
 		return r.setConditionAndReturn(ctx, srv, metav1.ConditionFalse, v1alpha1.ReasonSecretNotFound,
-			"credentialsSecret is required for SqlLogin auth")
+			"credentialsSecret is required for SqlLogin auth in external mode")
 	}
-
-	username, password, err := getCredentialsFromSecret(ctx, r.Client, secretNS, srv.Spec.CredentialsSecret.Name)
 	if err != nil {
 		if apierrors.IsNotFound(err) {
-			return r.setConditionAndReturn(ctx, srv, metav1.ConditionFalse, v1alpha1.ReasonSecretNotFound,
-				fmt.Sprintf("Secret %q not found in namespace %s", srv.Spec.CredentialsSecret.Name, secretNS))
+			return r.setConditionAndReturn(ctx, srv, metav1.ConditionFalse, v1alpha1.ReasonSecretNotFound, err.Error())
 		}
 		return r.setConditionAndReturn(ctx, srv, metav1.ConditionFalse, v1alpha1.ReasonInvalidCredentialsSecret, err.Error())
 	}

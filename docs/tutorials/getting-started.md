@@ -32,17 +32,12 @@ NAME                              READY   STATUS    RESTARTS   AGE
 mssql-operator-6d4f8b7c9f-x2k4l  1/1     Running   0          30s
 ```
 
-## Step 2: Create Secrets
+## Step 2: Create Secret
 
 ```bash
-# SA password for the SQL Server container
+# SA password — used by both the SQL Server container and the operator
 kubectl create secret generic mssql-sa-password \
   --from-literal=MSSQL_SA_PASSWORD='YourStr0ngP@ssword!'
-
-# Operator credentials (same password, used by the operator to connect)
-kubectl create secret generic sa-credentials \
-  --from-literal=username=sa \
-  --from-literal=password='YourStr0ngP@ssword!'
 ```
 
 ## Step 3: Deploy SQL Server with the SQLServer CR
@@ -55,8 +50,6 @@ kind: SQLServer
 metadata:
   name: mssql
 spec:
-  credentialsSecret:
-    name: sa-credentials
   instance:
     acceptEULA: true
     saPasswordSecret:

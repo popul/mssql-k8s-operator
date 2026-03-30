@@ -33,18 +33,13 @@ This guide walks you through deploying a highly available SQL Server cluster wit
 - The mssql-k8s-operator installed ([Installation guide](install.md))
 - `kubectl` configured
 
-## Step 1: Create Secrets
+## Step 1: Create Secret
 
 ```bash
 kubectl create namespace mssql
 
 kubectl create secret generic mssql-sa-password \
   --from-literal=MSSQL_SA_PASSWORD='YourStr0ngP@ssword!' \
-  -n mssql
-
-kubectl create secret generic sa-credentials \
-  --from-literal=username=sa \
-  --from-literal=password='YourStr0ngP@ssword!' \
   -n mssql
 ```
 
@@ -57,8 +52,6 @@ metadata:
   name: mssql
   namespace: mssql
 spec:
-  credentialsSecret:
-    name: sa-credentials
   instance:
     acceptEULA: true
     edition: Enterprise          # or Developer for non-prod

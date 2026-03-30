@@ -53,7 +53,7 @@ Defines a SQL Server connection. In **managed mode** (`spec.instance` is set), t
 | `host` | `string` | conditional | | no | Hostname or IP. Required in external mode. |
 | `port` | `*int32` | no | `1433` | no | TCP port |
 | `authMethod` | `AuthenticationMethod` | no | `SqlLogin` | no | `SqlLogin`, `AzureAD`, `ManagedIdentity` |
-| `credentialsSecret` | `*CrossNamespaceSecretReference` | conditional | | no | Secret with `username`/`password`. Required for SqlLogin. |
+| `credentialsSecret` | `*CrossNamespaceSecretReference` | conditional | | no | Secret with `username`/`password`. Required for SqlLogin in external mode. Optional in managed mode (falls back to `sa` + `saPasswordSecret`). |
 | `azureAD` | `*AzureADAuth` | conditional | | no | Azure AD config. Required for AzureAD auth. |
 | `managedIdentity` | `*ManagedIdentityAuth` | conditional | | no | Managed Identity config. |
 | `tls` | `*bool` | no | `false` | no | Enable TLS |

@@ -12,8 +12,6 @@ kind: SQLServer
 metadata:
   name: mssql
 spec:
-  credentialsSecret:
-    name: sa-credentials
   instance:
     acceptEULA: true
     image: mcr.microsoft.com/mssql/server:2022-CU16-ubuntu-22.04

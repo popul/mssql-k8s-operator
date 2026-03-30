@@ -230,14 +230,9 @@ func (r *SQLServer) validate() error {
 			}
 		}
 
-		// CredentialsSecret is still required (operator uses it to connect)
-		switch r.Spec.AuthMethod {
-		case AuthSqlLogin, "":
-			if r.Spec.CredentialsSecret == nil {
-				allErrs = append(allErrs, field.Required(specPath.Child("credentialsSecret"),
-					"credentialsSecret is required for the operator to connect to SQL Server"))
-			}
-		}
+		// In managed mode, credentialsSecret is optional for SqlLogin:
+		// if omitted, the operator falls back to sa + saPasswordSecret.
+		// No validation needed here — the controller handles the fallback.
 	} else {
 		// External mode: host is required
 		if r.Spec.Host == "" {

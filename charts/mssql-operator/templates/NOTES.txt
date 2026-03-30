@@ -10,11 +10,9 @@ To verify the operator is running:
 
 Quick start -- deploy a managed SQL Server:
 
-  # Create secrets
+  # Create secret
   kubectl create secret generic mssql-sa-password \
     --from-literal=MSSQL_SA_PASSWORD='YourStr0ngP@ssword!'
-  kubectl create secret generic sa-credentials \
-    --from-literal=username=sa --from-literal=password='YourStr0ngP@ssword!'
 
   # Deploy a SQL Server instance
   cat <<EOF | kubectl apply -f -
@@ -23,8 +21,6 @@ Quick start -- deploy a managed SQL Server:
   metadata:
     name: mssql
   spec:
-    credentialsSecret:
-      name: sa-credentials
     instance:
       acceptEULA: true
       saPasswordSecret:

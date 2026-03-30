@@ -569,6 +569,104 @@ func TestSQLServer_Managed_ClusterMode_HADREnabled(t *testing.T) {
 	}
 }
 
+func TestSQLServer_Managed_NoCredentialsSecret_FallbackToSAPassword(t *testing.T) {
+	mockSQL := sqlclient.NewMockClient()
+	srv := testManagedSQLServer("managed-sql")
+	// Remove credentialsSecret — should fall back to sa + saPasswordSecret
+	srv.Spec.CredentialsSecret = nil
+
+	replicas := int32(1)
+	sts := &appsv1.StatefulSet{
+		ObjectMeta: metav1.ObjectMeta{Name: "managed-sql", Namespace: "default"},
+		Spec:       appsv1.StatefulSetSpec{Replicas: &replicas},
+		Status:     appsv1.StatefulSetStatus{ReadyReplicas: 1},
+	}
+	// Only saPasswordSecret, no sa-credentials secret
+	r, _ := newTestSQLServerReconciler([]runtime.Object{srv, saPasswordSecret(), sts}, mockSQL)
+
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: "managed-sql", Namespace: "default"}}
+	// Finalizer
+	_, _ = r.Reconcile(context.Background(), req)
+	// Actual reconcile — should succeed using saPasswordSecret
+	result, err := r.Reconcile(context.Background(), req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.RequeueAfter == 0 {
+		t.Error("expected periodic requeue for health polling")
+	}
+
+	var updated v1alpha1.SQLServer
+	_ = r.Get(context.Background(), req.NamespacedName, &updated)
+	if len(updated.Status.Conditions) == 0 || updated.Status.Conditions[0].Status != metav1.ConditionTrue {
+		t.Error("expected Ready=True when falling back to saPasswordSecret")
+	}
+}
+
+func TestResolveServerCredentials_ManagedFallback(t *testing.T) {
+	srv := &v1alpha1.SQLServer{
+		ObjectMeta: metav1.ObjectMeta{Name: "managed-sql", Namespace: "default"},
+		Spec: v1alpha1.SQLServerSpec{
+			// No CredentialsSecret — managed mode with saPasswordSecret
+			Instance: &v1alpha1.InstanceSpec{
+				SAPasswordSecret: v1alpha1.SecretReference{Name: "mssql-sa-password"},
+				AcceptEULA:       true,
+			},
+		},
+		Status: v1alpha1.SQLServerStatus{
+			Host: "managed-sql.default.svc.cluster.local",
+		},
+	}
+	saSecret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: "mssql-sa-password", Namespace: "default"},
+		Data:       map[string][]byte{"MSSQL_SA_PASSWORD": []byte("P@ssw0rd!")},
+	}
+	scheme := newScheme()
+	k8sClient := fake.NewClientBuilder().WithScheme(scheme).WithRuntimeObjects(srv, saSecret).Build()
+
+	srvName := "managed-sql"
+	ref := v1alpha1.ServerReference{SQLServerRef: &srvName}
+	username, password, err := resolveServerCredentials(context.Background(), k8sClient, "default", ref)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if username != "sa" {
+		t.Errorf("expected username=sa, got %s", username)
+	}
+	if password != "P@ssw0rd!" {
+		t.Errorf("expected password=P@ssw0rd!, got %s", password)
+	}
+}
+
+func TestResolveServerCredentials_WithCredentialsSecret(t *testing.T) {
+	srv := &v1alpha1.SQLServer{
+		ObjectMeta: metav1.ObjectMeta{Name: "ext-sql", Namespace: "default"},
+		Spec: v1alpha1.SQLServerSpec{
+			Host:              "external.svc",
+			CredentialsSecret: &v1alpha1.CrossNamespaceSecretReference{Name: "custom-creds"},
+		},
+	}
+	credsSecret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: "custom-creds", Namespace: "default"},
+		Data:       map[string][]byte{"username": []byte("admin"), "password": []byte("secret")},
+	}
+	scheme := newScheme()
+	k8sClient := fake.NewClientBuilder().WithScheme(scheme).WithRuntimeObjects(srv, credsSecret).Build()
+
+	srvName := "ext-sql"
+	ref := v1alpha1.ServerReference{SQLServerRef: &srvName}
+	username, password, err := resolveServerCredentials(context.Background(), k8sClient, "default", ref)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if username != "admin" {
+		t.Errorf("expected username=admin, got %s", username)
+	}
+	if password != "secret" {
+		t.Errorf("expected password=secret, got %s", password)
+	}
+}
+
 func TestResolveServerReference_ManagedMode_UsesStatusHost(t *testing.T) {
 	srv := &v1alpha1.SQLServer{
 		ObjectMeta: metav1.ObjectMeta{Name: "managed-sql", Namespace: "default"},

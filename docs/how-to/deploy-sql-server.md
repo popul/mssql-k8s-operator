@@ -9,22 +9,21 @@ This guide shows how to deploy a SQL Server instance using the `SQLServer` CR. T
 - The mssql-k8s-operator installed ([Installation guide](install.md))
 - `kubectl` configured
 
-## Step 1: Create Secrets
+## Step 1: Create Secret
 
 ```bash
 kubectl create namespace mssql
 
-# SA password for the SQL Server container
+# SA password — used by both the SQL Server container and the operator
 kubectl create secret generic mssql-sa-password \
   --from-literal=MSSQL_SA_PASSWORD='YourStr0ngP@ssword!' \
   -n mssql
-
-# Operator credentials (must use the same password)
-kubectl create secret generic sa-credentials \
-  --from-literal=username=sa \
-  --from-literal=password='YourStr0ngP@ssword!' \
-  -n mssql
 ```
+
+> **Note**: In managed mode, if `credentialsSecret` is not set on the SQLServer CR, the operator
+> automatically connects using `sa` with the password from `saPasswordSecret`. A single secret is
+> sufficient. If you need a dedicated operator account (recommended for production), create a
+> separate credentials secret with `username` and `password` keys and set `credentialsSecret` on the CR.
 
 ## Step 2: Create the SQLServer CR
 
@@ -37,8 +36,6 @@ metadata:
   name: mssql
   namespace: mssql
 spec:
-  credentialsSecret:
-    name: sa-credentials
   instance:
     acceptEULA: true
     saPasswordSecret:
@@ -62,8 +59,6 @@ metadata:
   name: mssql
   namespace: mssql
 spec:
-  credentialsSecret:
-    name: sa-credentials
   instance:
     acceptEULA: true
     edition: Enterprise

@@ -41,6 +41,20 @@ func getCredentialsFromSecret(ctx context.Context, c client.Client, namespace, s
 	return string(username), string(password), nil
 }
 
+// getCredentialsFromSAPasswordSecret reads the "MSSQL_SA_PASSWORD" key from the SA password Secret
+// and returns "sa" as the username. Used as fallback when credentialsSecret is not set in managed mode.
+func getCredentialsFromSAPasswordSecret(ctx context.Context, c client.Client, namespace, secretName string) (user, pass string, err error) {
+	var secret corev1.Secret
+	if err := c.Get(ctx, types.NamespacedName{Name: secretName, Namespace: namespace}, &secret); err != nil {
+		return "", "", err
+	}
+	password, ok := secret.Data["MSSQL_SA_PASSWORD"]
+	if !ok {
+		return "", "", fmt.Errorf("secret %q missing 'MSSQL_SA_PASSWORD' key", secretName)
+	}
+	return "sa", string(password), nil
+}
+
 // connectToSQL creates a SQL client from a ServerReference, credentials, and factory.
 func connectToSQL(server v1alpha1.ServerReference, username, password string, factory sqlclient.ClientFactory) (sqlclient.SQLClient, error) {
 	port := int32(1433)
@@ -250,6 +264,36 @@ func resolveServerReference(ctx context.Context, c client.Client, namespace stri
 		}
 	}
 	return resolved, nil
+}
+
+// resolveServerCredentials resolves credentials for a ServerReference.
+// When sqlServerRef points to a managed instance without credentialsSecret,
+// it falls back to reading the SA password from saPasswordSecret.
+func resolveServerCredentials(ctx context.Context, c client.Client, namespace string, ref v1alpha1.ServerReference) (username, password string, err error) {
+	// Inline mode: use the credentials secret directly
+	if ref.SQLServerRef == nil {
+		return getCredentialsFromSecret(ctx, c, namespace, ref.CredentialsSecret.Name)
+	}
+
+	var srv v1alpha1.SQLServer
+	if err := c.Get(ctx, types.NamespacedName{Name: *ref.SQLServerRef, Namespace: namespace}, &srv); err != nil {
+		return "", "", fmt.Errorf("failed to resolve SQLServer %q: %w", *ref.SQLServerRef, err)
+	}
+
+	if srv.Spec.CredentialsSecret != nil {
+		secretNS := namespace
+		if srv.Spec.CredentialsSecret.Namespace != nil {
+			secretNS = *srv.Spec.CredentialsSecret.Namespace
+		}
+		return getCredentialsFromSecret(ctx, c, secretNS, srv.Spec.CredentialsSecret.Name)
+	}
+
+	// Managed mode fallback: use sa + saPasswordSecret
+	if srv.Spec.Instance != nil {
+		return getCredentialsFromSAPasswordSecret(ctx, c, namespace, srv.Spec.Instance.SAPasswordSecret.Name)
+	}
+
+	return "", "", fmt.Errorf("SQLServer %q has no credentialsSecret and is not in managed mode", *ref.SQLServerRef)
 }
 
 // requeueWithJitter returns a RequeueAfter duration with ±20% jitter to avoid thundering herd.

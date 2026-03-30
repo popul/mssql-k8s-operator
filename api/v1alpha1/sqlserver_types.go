@@ -220,7 +220,8 @@ type SQLServerSpec struct {
 	AuthMethod AuthenticationMethod `json:"authMethod,omitempty"`
 
 	// CredentialsSecret references a Secret containing "username" and "password" keys.
-	// Required when authMethod is SqlLogin.
+	// Required when authMethod is SqlLogin in external mode.
+	// Optional in managed mode: if omitted, the operator uses "sa" with the password from instance.saPasswordSecret.
 	// +optional
 	CredentialsSecret *CrossNamespaceSecretReference `json:"credentialsSecret,omitempty"`
 
