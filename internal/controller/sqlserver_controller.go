@@ -43,6 +43,7 @@ type SQLServerReconciler struct {
 // +kubebuilder:rbac:groups=mssql.popul.io,resources=sqlservers/finalizers,verbs=update
 // +kubebuilder:rbac:groups=apps,resources=statefulsets,verbs=get;list;watch;create;update;patch
 // +kubebuilder:rbac:groups="",resources=services,verbs=get;list;watch;create;update;patch
+// +kubebuilder:rbac:groups="",resources=pods,verbs=get;list;watch;patch
 // +kubebuilder:rbac:groups="",resources=persistentvolumeclaims,verbs=get;list;watch
 
 func (r *SQLServerReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
@@ -102,6 +103,15 @@ func (r *SQLServerReconciler) reconcileManaged(ctx context.Context, srv *v1alpha
 	if err := r.reconcileClientService(ctx, srv); err != nil {
 		return ctrl.Result{}, fmt.Errorf("failed to reconcile client service: %w", err)
 	}
+	replicas := int32(1)
+	if srv.Spec.Instance.Replicas != nil {
+		replicas = *srv.Spec.Instance.Replicas
+	}
+	if replicas > 1 {
+		if err := r.reconcileReadOnlyService(ctx, srv); err != nil {
+			return ctrl.Result{}, fmt.Errorf("failed to reconcile read-only service: %w", err)
+		}
+	}
 	if err := r.reconcileStatefulSet(ctx, srv); err != nil {
 		return ctrl.Result{}, fmt.Errorf("failed to reconcile statefulset: %w", err)
 	}
@@ -128,11 +138,6 @@ func (r *SQLServerReconciler) reconcileManaged(ctx context.Context, srv *v1alpha
 			return ctrl.Result{}, err
 		}
 		return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
-	}
-
-	replicas := int32(1)
-	if srv.Spec.Instance.Replicas != nil {
-		replicas = *srv.Spec.Instance.Replicas
 	}
 
 	// Phase 2: Certificates (cluster mode only)
@@ -184,13 +189,18 @@ func (r *SQLServerReconciler) reconcileManaged(ctx context.Context, srv *v1alpha
 		}
 	}
 
-	// Phase 4: Persist PrimaryReplica in status if it was set during AG reconciliation
+	// Phase 4: Persist PrimaryReplica in status and update pod role labels
 	if srv.Status.PrimaryReplica != "" {
 		if err := r.Status().Patch(ctx, srv, patch); err != nil {
 			return ctrl.Result{}, err
 		}
 		// Re-create patch from the now-updated object
 		patch = client.MergeFrom(srv.DeepCopy())
+
+		// Label pods with their role (primary/secondary) for service routing
+		if err := r.reconcileReplicaRoleLabels(ctx, srv, srv.Status.PrimaryReplica); err != nil {
+			logger.Error(err, "failed to reconcile replica role labels")
+		}
 	}
 
 	// Phase 5: Probe SQL Server (connect to primary / standalone)

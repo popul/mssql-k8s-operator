@@ -1096,6 +1096,32 @@ func (m *MockClient) CreateCertificateFromBackup(_ context.Context, _, _, _, _ s
 	return nil
 }
 
+func (m *MockClient) GetCertificateBinary(_ context.Context, _ string) ([]byte, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.track("GetCertificateBinary")
+	if err := m.checkConnect(); err != nil {
+		return nil, err
+	}
+	if err := m.checkMethodError("GetCertificateBinary"); err != nil {
+		return nil, err
+	}
+	return []byte{0x30, 0x82}, nil // Minimal DER stub
+}
+
+func (m *MockClient) CreateCertificateFromBinary(_ context.Context, _ string, _ []byte) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.track("CreateCertificateFromBinary")
+	if err := m.checkConnect(); err != nil {
+		return err
+	}
+	if err := m.checkMethodError("CreateCertificateFromBinary"); err != nil {
+		return err
+	}
+	return nil
+}
+
 func (m *MockClient) CreateLoginFromCertificate(_ context.Context, _, _ string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()

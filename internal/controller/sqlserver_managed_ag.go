@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -64,9 +65,18 @@ func (r *SQLServerReconciler) reconcileManagedAG(ctx context.Context, srv *v1alp
 	// Build the AvailabilityGroup CR
 	logger.Info("creating AvailabilityGroup CRD for managed cluster", "agName", agName, "replicas", replicas)
 
+	// Determine the credentials secret for the AG replicas.
+	// In managed mode without credentialsSecret, create a credentials secret
+	// from the saPasswordSecret so the AG controller can connect.
 	credsSecretName := ""
 	if srv.Spec.CredentialsSecret != nil {
 		credsSecretName = srv.Spec.CredentialsSecret.Name
+	} else if inst.SAPasswordSecret.Name != "" {
+		// Create a standard credentials secret from saPasswordSecret
+		credsSecretName = srv.Name + "-sa-credentials"
+		if err := r.ensureSACredentialsSecret(ctx, srv, credsSecretName); err != nil {
+			return fmt.Errorf("failed to ensure SA credentials secret: %w", err)
+		}
 	}
 
 	availabilityMode := v1alpha1.AvailabilityModeSynchronous
@@ -124,6 +134,41 @@ func (r *SQLServerReconciler) reconcileManagedAG(ctx context.Context, srv *v1alp
 		fmt.Sprintf("AvailabilityGroup CRD %s created for managed cluster", agCRName))
 	logger.Info("AvailabilityGroup CRD created", "name", agCRName, "agName", agName)
 	return nil
+}
+
+// ensureSACredentialsSecret creates a standard credentials secret (username/password)
+// from the SA password secret so the AG controller can use getCredentialsFromSecret.
+func (r *SQLServerReconciler) ensureSACredentialsSecret(ctx context.Context, srv *v1alpha1.SQLServer, secretName string) error {
+	var existing corev1.Secret
+	err := r.Get(ctx, types.NamespacedName{Name: secretName, Namespace: srv.Namespace}, &existing)
+	if err == nil {
+		return nil // Already exists
+	}
+	if !apierrors.IsNotFound(err) {
+		return err
+	}
+
+	// Read the SA password
+	_, password, err := getCredentialsFromSAPasswordSecret(ctx, r.Client, srv.Namespace, srv.Spec.Instance.SAPasswordSecret.Name)
+	if err != nil {
+		return fmt.Errorf("failed to read SA password: %w", err)
+	}
+
+	secret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      secretName,
+			Namespace: srv.Namespace,
+			Labels:    instanceLabels(srv),
+		},
+		Data: map[string][]byte{
+			"username": []byte("sa"),
+			"password": []byte(password),
+		},
+	}
+	if err := controllerutil.SetControllerReference(srv, secret, r.Scheme); err != nil {
+		return err
+	}
+	return r.Create(ctx, secret)
 }
 
 func stringPtr(s string) *string { return &s }

@@ -77,6 +77,8 @@ type SQLClient interface {
 	CertificateExists(ctx context.Context, certName string) (bool, error)
 	BackupCertificate(ctx context.Context, certName, certPath, keyPath, encryptionPassword string) error
 	CreateCertificateFromBackup(ctx context.Context, certName, certPath, keyPath, decryptionPassword string) error
+	GetCertificateBinary(ctx context.Context, certName string) ([]byte, error)
+	CreateCertificateFromBinary(ctx context.Context, certName string, certDER []byte) error
 	CreateLoginFromCertificate(ctx context.Context, loginName, certName string) error
 	GrantEndpointConnect(ctx context.Context, endpointName, loginName string) error
 	CreateHADREndpointWithCert(ctx context.Context, port int, certName string) error

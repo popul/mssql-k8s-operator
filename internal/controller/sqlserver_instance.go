@@ -13,6 +13,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/intstr"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
 	v1alpha1 "github.com/popul/mssql-k8s-operator/api/v1alpha1"
@@ -21,6 +22,13 @@ import (
 const (
 	hadrEndpointPort = 5022
 	sqlPort          = 1433
+
+	// LabelRole is the label key used to identify the role of a SQL Server pod in HA mode.
+	LabelRole = "mssql.popul.io/role"
+	// RolePrimary is the label value for the primary replica.
+	RolePrimary = "primary"
+	// RoleSecondary is the label value for secondary replicas.
+	RoleSecondary = "secondary"
 )
 
 // reconcileStatefulSet ensures the StatefulSet exists and is up to date.
@@ -125,9 +133,17 @@ func (r *SQLServerReconciler) reconcileClientService(ctx context.Context, srv *v
 		return err
 	}
 
-	// Update service type if changed
+	// Update service type or selector if changed
+	needsUpdate := false
 	if existing.Spec.Type != desired.Spec.Type {
 		existing.Spec.Type = desired.Spec.Type
+		needsUpdate = true
+	}
+	if existing.Spec.Selector[LabelRole] != desired.Spec.Selector[LabelRole] {
+		existing.Spec.Selector = desired.Spec.Selector
+		needsUpdate = true
+	}
+	if needsUpdate {
 		return r.Update(ctx, &existing)
 	}
 	return nil
@@ -397,6 +413,17 @@ func (r *SQLServerReconciler) desiredHeadlessService(srv *v1alpha1.SQLServer) *c
 
 func (r *SQLServerReconciler) desiredClientService(srv *v1alpha1.SQLServer) *corev1.Service {
 	labels := instanceLabels(srv)
+	selector := instanceLabels(srv)
+
+	// In multi-replica mode, route traffic only to the primary.
+	replicas := int32(1)
+	if srv.Spec.Instance.Replicas != nil {
+		replicas = *srv.Spec.Instance.Replicas
+	}
+	if replicas > 1 {
+		selector[LabelRole] = RolePrimary
+	}
+
 	svcType := corev1.ServiceTypeClusterIP
 	if srv.Spec.Instance.ServiceType != nil {
 		svcType = *srv.Spec.Instance.ServiceType
@@ -409,12 +436,112 @@ func (r *SQLServerReconciler) desiredClientService(srv *v1alpha1.SQLServer) *cor
 		},
 		Spec: corev1.ServiceSpec{
 			Type:     svcType,
-			Selector: labels,
+			Selector: selector,
 			Ports: []corev1.ServicePort{
 				{Name: "sql", Port: sqlPort, TargetPort: intstr.FromInt32(sqlPort)},
 			},
 		},
 	}
+}
+
+// desiredReadOnlyService builds a Service that routes to secondary replicas only.
+func (r *SQLServerReconciler) desiredReadOnlyService(srv *v1alpha1.SQLServer) *corev1.Service {
+	labels := instanceLabels(srv)
+	selector := instanceLabels(srv)
+	selector[LabelRole] = RoleSecondary
+
+	svcType := corev1.ServiceTypeClusterIP
+	if srv.Spec.Instance.ServiceType != nil {
+		svcType = *srv.Spec.Instance.ServiceType
+	}
+	return &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      srv.Name + "-readonly",
+			Namespace: srv.Namespace,
+			Labels:    labels,
+		},
+		Spec: corev1.ServiceSpec{
+			Type:     svcType,
+			Selector: selector,
+			Ports: []corev1.ServicePort{
+				{Name: "sql", Port: sqlPort, TargetPort: intstr.FromInt32(sqlPort)},
+			},
+		},
+	}
+}
+
+// reconcileReadOnlyService ensures the read-only Service exists for multi-replica mode.
+func (r *SQLServerReconciler) reconcileReadOnlyService(ctx context.Context, srv *v1alpha1.SQLServer) error {
+	desired := r.desiredReadOnlyService(srv)
+	if err := controllerutil.SetControllerReference(srv, desired, r.Scheme); err != nil {
+		return fmt.Errorf("failed to set owner reference on read-only Service: %w", err)
+	}
+
+	var existing corev1.Service
+	err := r.Get(ctx, types.NamespacedName{Name: desired.Name, Namespace: desired.Namespace}, &existing)
+	if apierrors.IsNotFound(err) {
+		return r.Create(ctx, desired)
+	}
+	if err != nil {
+		return err
+	}
+
+	// Update selector or service type if changed
+	needsUpdate := false
+	if existing.Spec.Type != desired.Spec.Type {
+		existing.Spec.Type = desired.Spec.Type
+		needsUpdate = true
+	}
+	if existing.Spec.Selector[LabelRole] != desired.Spec.Selector[LabelRole] {
+		existing.Spec.Selector = desired.Spec.Selector
+		needsUpdate = true
+	}
+	if needsUpdate {
+		return r.Update(ctx, &existing)
+	}
+	return nil
+}
+
+// reconcileReplicaRoleLabels labels each pod with its role (primary or secondary).
+// primaryReplica can be a FQDN or a short pod name.
+func (r *SQLServerReconciler) reconcileReplicaRoleLabels(ctx context.Context, srv *v1alpha1.SQLServer, primaryReplica string) error {
+	replicas := int32(1)
+	if srv.Spec.Instance.Replicas != nil {
+		replicas = *srv.Spec.Instance.Replicas
+	}
+
+	// Extract the short pod name from FQDN if needed (e.g. "mssql-0.mssql-headless.ns.svc.cluster.local" → "mssql-0")
+	primaryPodName := primaryReplica
+	if idx := strings.Index(primaryReplica, "."); idx > 0 {
+		primaryPodName = primaryReplica[:idx]
+	}
+
+	for i := int32(0); i < replicas; i++ {
+		podName := fmt.Sprintf("%s-%d", srv.Name, i)
+		var pod corev1.Pod
+		if err := r.Get(ctx, types.NamespacedName{Name: podName, Namespace: srv.Namespace}, &pod); err != nil {
+			continue // Pod may not exist yet
+		}
+
+		desiredRole := RoleSecondary
+		if podName == primaryPodName {
+			desiredRole = RolePrimary
+		}
+
+		if pod.Labels[LabelRole] == desiredRole {
+			continue // Already correct
+		}
+
+		patch := client.MergeFrom(pod.DeepCopy())
+		if pod.Labels == nil {
+			pod.Labels = make(map[string]string)
+		}
+		pod.Labels[LabelRole] = desiredRole
+		if err := r.Patch(ctx, &pod, patch); err != nil {
+			return fmt.Errorf("failed to label pod %s with role %s: %w", podName, desiredRole, err)
+		}
+	}
+	return nil
 }
 
 // managedHost returns the FQDN for the client service.

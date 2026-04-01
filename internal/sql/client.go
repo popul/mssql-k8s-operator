@@ -781,6 +781,25 @@ func (c *MSSQLClient) CreateCertificateFromBackup(ctx context.Context, certName,
 	return nil
 }
 
+func (c *MSSQLClient) GetCertificateBinary(ctx context.Context, certName string) ([]byte, error) {
+	var certDER []byte
+	query := fmt.Sprintf("SELECT CERTENCODED(CERT_ID(%s))", QuoteString(certName))
+	err := c.db.QueryRowContext(ctx, query).Scan(&certDER)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get certificate binary for %s: %w", certName, err)
+	}
+	return certDER, nil
+}
+
+func (c *MSSQLClient) CreateCertificateFromBinary(ctx context.Context, certName string, certDER []byte) error {
+	query := fmt.Sprintf("CREATE CERTIFICATE %s FROM BINARY = 0x%x", QuoteName(certName), certDER)
+	_, err := c.db.ExecContext(ctx, query)
+	if err != nil {
+		return fmt.Errorf("failed to create certificate %s from binary: %w", certName, err)
+	}
+	return nil
+}
+
 func (c *MSSQLClient) CreateLoginFromCertificate(ctx context.Context, loginName, certName string) error {
 	query := fmt.Sprintf("CREATE LOGIN %s FROM CERTIFICATE %s", QuoteName(loginName), QuoteName(certName))
 	_, err := c.db.ExecContext(ctx, query)

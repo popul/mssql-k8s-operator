@@ -43,6 +43,7 @@ type AvailabilityGroupReconciler struct {
 // +kubebuilder:rbac:groups=mssql.popul.io,resources=availabilitygroups/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=mssql.popul.io,resources=availabilitygroups/finalizers,verbs=update
 // +kubebuilder:rbac:groups=coordination.k8s.io,resources=leases,verbs=get;list;watch;create;update;patch
+// +kubebuilder:rbac:groups="",resources=pods,verbs=get;list;watch;patch
 
 func (r *AvailabilityGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	logger := log.FromContext(ctx)
@@ -190,6 +191,11 @@ func (r *AvailabilityGroupReconciler) Reconcile(ctx context.Context, req ctrl.Re
 
 	if err := r.updateAGStatus(ctx, &ag, agStatus); err != nil {
 		return ctrl.Result{}, err
+	}
+
+	// Keep pod role labels in sync with actual AG state
+	if agStatus.PrimaryReplica != "" {
+		r.updateReplicaRoleLabelsFromAG(ctx, &ag, agStatus.PrimaryReplica)
 	}
 
 	opmetrics.ReconcileTotal.WithLabelValues("AvailabilityGroup", "success").Inc()
@@ -649,6 +655,9 @@ func (r *AvailabilityGroupReconciler) handleAutoFailover(ctx context.Context, ag
 			fmt.Sprintf("AG %s auto-failover to %s completed", ag.Spec.AGName, replica.ServerName))
 		logger.Info("auto-failover completed", "newPrimary", replica.ServerName)
 
+		// Update pod role labels immediately for fast service routing convergence
+		r.updateReplicaRoleLabelsFromAG(ctx, ag, replica.ServerName)
+
 		opmetrics.ReconcileTotal.WithLabelValues("AvailabilityGroup", "auto_failover").Inc()
 		return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
 	}
@@ -704,6 +713,40 @@ func (r *AvailabilityGroupReconciler) tryAcquireLease(ctx context.Context, names
 	}
 
 	return false
+}
+
+// updateReplicaRoleLabelsFromAG labels pods with primary/secondary based on the AG replica list.
+// It uses the AG spec replicas to determine which pods to label.
+func (r *AvailabilityGroupReconciler) updateReplicaRoleLabelsFromAG(ctx context.Context, ag *v1alpha1.AvailabilityGroup, primaryServerName string) {
+	logger := log.FromContext(ctx)
+
+	for _, replica := range ag.Spec.Replicas {
+		// The ServerName is typically a short pod name like "sql-0"
+		podName := replica.ServerName
+
+		var pod corev1.Pod
+		if err := r.Get(ctx, types.NamespacedName{Name: podName, Namespace: ag.Namespace}, &pod); err != nil {
+			continue
+		}
+
+		desiredRole := RoleSecondary
+		if podName == primaryServerName {
+			desiredRole = RolePrimary
+		}
+
+		if pod.Labels[LabelRole] == desiredRole {
+			continue
+		}
+
+		patch := client.MergeFrom(pod.DeepCopy())
+		if pod.Labels == nil {
+			pod.Labels = make(map[string]string)
+		}
+		pod.Labels[LabelRole] = desiredRole
+		if err := r.Patch(ctx, &pod, patch); err != nil {
+			logger.Error(err, "failed to update pod role label", "pod", podName, "role", desiredRole)
+		}
+	}
 }
 
 func mapClusterType(ct string) string {

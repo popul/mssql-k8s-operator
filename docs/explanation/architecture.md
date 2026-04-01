@@ -27,10 +27,12 @@ Each controller follows the same pattern:
 For managed `SQLServer` CRs, the reconciliation has additional phases:
 
 ```
-1. Infrastructure — Create/update StatefulSet, headless Service, client Service
+1. Infrastructure — Create/update StatefulSet, headless Service, client Service,
+                    read-only Service (if replicas > 1)
 2. Certificates   — Generate and distribute HADR certificates (if replicas > 1)
 3. AG             — Create/configure Availability Group (if replicas > 1)
-4. Probe          — Connect to SQL Server and update status (version, edition, etc.)
+4. Role labels    — Label pods with mssql.popul.io/role=primary|secondary
+5. Probe          — Connect to SQL Server and update status (version, edition, etc.)
 ```
 
 Each phase requeues if not yet ready, ensuring non-blocking progression.
@@ -77,14 +79,32 @@ When `spec.instance` is set, the SQLServer controller manages the full lifecycle
 
 1. **StatefulSet** with VolumeClaimTemplates for persistent storage per replica
 2. **Headless Service** for inter-pod DNS resolution (required for HADR)
-3. **Client Service** for application access (configurable type: ClusterIP, NodePort, LoadBalancer)
-4. **Self-signed certificates** (or cert-manager integration) for HADR endpoint authentication
-5. **Availability Group** creation and secondary joining (for replicas > 1)
-6. **Auto-failover** monitoring and execution via Kubernetes Leases
+3. **Client Service** (read-write) for application access (configurable type: ClusterIP, NodePort, LoadBalancer)
+4. **Read-Only Service** for read-scale queries routed to secondaries (replicas > 1 only)
+5. **Self-signed certificates** (or cert-manager integration) for HADR endpoint authentication
+6. **Availability Group** creation and secondary joining (for replicas > 1)
+7. **Auto-failover** monitoring and execution via Kubernetes Leases
 
 All child resources (StatefulSet, Services, Secrets) have owner references back to the `SQLServer` CR, ensuring garbage collection on deletion.
 
 Other CRDs (`Database`, `Login`, etc.) reference the `SQLServer` CR via `sqlServerRef` and the controller resolves the connection details from the `SQLServer` CR's status.
+
+### HA service routing
+
+In multi-replica mode, the operator labels each pod with `mssql.popul.io/role=primary` or `mssql.popul.io/role=secondary`. These labels serve as Service selectors:
+
+- The **client service** (`{name}`) selects `role=primary` only, ensuring writes always reach the current primary.
+- The **read-only service** (`{name}-readonly`) selects `role=secondary` only, enabling read-scale workloads via `ApplicationIntent=ReadOnly`.
+- The **headless service** (`{name}-headless`) matches all pods (no role filter) for inter-replica HADR and direct pod addressing.
+
+In single-replica mode, no role label is added and no read-only service is created — the client service targets all pods (only one exists).
+
+Labels are updated in two places for fast convergence:
+
+1. **SQLServer controller** — after reading `PrimaryReplica` from the AvailabilityGroup CR status during each reconciliation cycle.
+2. **AvailabilityGroup controller** — immediately after auto-failover completes or after observing the current AG status from SQL Server.
+
+This dual-write ensures that even if one controller is delayed, the labels converge within a single reconciliation cycle (~10s with auto-failover health checks). Kubernetes endpoints are updated within seconds after labels change, so applications experience minimal routing delay during failover.
 
 ## Secret watches
 

@@ -285,16 +285,21 @@ func (r *SQLServerReconciler) distributeCertificatesToSQL(ctx context.Context, s
 		replicas = *inst.Replicas
 	}
 
-	// Read credentials for connecting to each replica
-	secretNS := srv.Namespace
-	if srv.Spec.CredentialsSecret != nil && srv.Spec.CredentialsSecret.Namespace != nil {
-		secretNS = *srv.Spec.CredentialsSecret.Namespace
+	// Read credentials for connecting to each replica.
+	// In managed mode without credentialsSecret, fall back to sa + saPasswordSecret.
+	var username, password string
+	var err error
+	if srv.Spec.CredentialsSecret != nil {
+		secretNS := srv.Namespace
+		if srv.Spec.CredentialsSecret.Namespace != nil {
+			secretNS = *srv.Spec.CredentialsSecret.Namespace
+		}
+		username, password, err = getCredentialsFromSecret(ctx, r.Client, secretNS, srv.Spec.CredentialsSecret.Name)
+	} else if inst.SAPasswordSecret.Name != "" {
+		username, password, err = getCredentialsFromSAPasswordSecret(ctx, r.Client, srv.Namespace, inst.SAPasswordSecret.Name)
+	} else {
+		return fmt.Errorf("no credentials available: set credentialsSecret or saPasswordSecret")
 	}
-	if srv.Spec.CredentialsSecret == nil {
-		return fmt.Errorf("credentialsSecret is required")
-	}
-
-	username, password, err := getCredentialsFromSecret(ctx, r.Client, secretNS, srv.Spec.CredentialsSecret.Name)
 	if err != nil {
 		return fmt.Errorf("failed to read credentials: %w", err)
 	}
@@ -305,6 +310,8 @@ func (r *SQLServerReconciler) distributeCertificatesToSQL(ctx context.Context, s
 	}
 	tlsEnabled := srv.Spec.TLS != nil && *srv.Spec.TLS
 
+	// Pass 1: Setup own cert + endpoint on each replica, collect cert binaries
+	certBinaries := make(map[int32][]byte, replicas)
 	for i := int32(0); i < replicas; i++ {
 		host := replicaHost(srv, int(i))
 		logger.V(1).Info("distributing certificates to replica", "replica", i, "host", host)
@@ -317,6 +324,71 @@ func (r *SQLServerReconciler) distributeCertificatesToSQL(ctx context.Context, s
 		if err := r.setupReplicaCertificates(ctx, sqlConn, srv, i); err != nil {
 			sqlConn.Close()
 			return fmt.Errorf("failed to setup certificates on replica %d: %w", i, err)
+		}
+
+		// Collect this replica's public cert binary for peer exchange
+		sqlCtx, cancel := sqlContext(ctx)
+		certName := fmt.Sprintf("ag_cert_%d", i)
+		certDER, err := sqlConn.GetCertificateBinary(sqlCtx, certName)
+		cancel()
+		sqlConn.Close()
+		if err != nil {
+			return fmt.Errorf("failed to get cert binary from replica %d: %w", i, err)
+		}
+		certBinaries[i] = certDER
+	}
+
+	// Pass 2: Import peer certificates on each replica
+	for i := int32(0); i < replicas; i++ {
+		host := replicaHost(srv, int(i))
+		sqlConn, err := r.SQLClientFactory(host, int(port), username, password, tlsEnabled)
+		if err != nil {
+			return fmt.Errorf("failed to reconnect to replica %d: %w", i, err)
+		}
+
+		for j := int32(0); j < replicas; j++ {
+			if j == i {
+				continue
+			}
+			peerCertName := fmt.Sprintf("ag_cert_%d", j)
+			peerLoginName := fmt.Sprintf("ag_login_%d", j)
+
+			sqlCtx, cancel := sqlContext(ctx)
+			peerExists, err := sqlConn.CertificateExists(sqlCtx, peerCertName)
+			cancel()
+			if err != nil {
+				sqlConn.Close()
+				return fmt.Errorf("failed to check peer cert %s on replica %d: %w", peerCertName, i, err)
+			}
+			if peerExists {
+				continue
+			}
+
+			sqlCtx2, cancel2 := sqlContext(ctx)
+			if err := sqlConn.CreateCertificateFromBinary(sqlCtx2, peerCertName, certBinaries[j]); err != nil {
+				cancel2()
+				sqlConn.Close()
+				return fmt.Errorf("failed to import peer cert %s on replica %d: %w", peerCertName, i, err)
+			}
+			cancel2()
+
+			sqlCtx3, cancel3 := sqlContext(ctx)
+			if err := sqlConn.CreateLoginFromCertificate(sqlCtx3, peerLoginName, peerCertName); err != nil {
+				cancel3()
+				sqlConn.Close()
+				return fmt.Errorf("failed to create login from peer cert on replica %d: %w", i, err)
+			}
+			cancel3()
+
+			sqlCtx4, cancel4 := sqlContext(ctx)
+			if err := sqlConn.GrantEndpointConnect(sqlCtx4, "hadr_endpoint", peerLoginName); err != nil {
+				cancel4()
+				sqlConn.Close()
+				return fmt.Errorf("failed to grant endpoint connect on replica %d: %w", i, err)
+			}
+			cancel4()
+
+			logger.Info("imported peer certificate", "replica", i, "peer", j)
 		}
 		sqlConn.Close()
 	}
@@ -364,19 +436,6 @@ func (r *SQLServerReconciler) setupReplicaCertificates(ctx context.Context, conn
 			return fmt.Errorf("failed to create HADR endpoint: %w", err)
 		}
 	}
-
-	// 4. Backup own cert to a well-known path for peer import.
-	// The cert secrets are mounted at /var/opt/mssql/certs/{i}/ on ALL pods.
-	// But SQL Server needs DER format, so we backup from SQL to get DER files.
-	certPath := fmt.Sprintf("/var/opt/mssql/backup/%s.cer", certName)
-	keyPath := fmt.Sprintf("/var/opt/mssql/backup/%s.key", certName)
-	certPassword := fmt.Sprintf("CertP@ss%d!", replicaIndex)
-	_ = conn.BackupCertificate(sqlCtx, certName, certPath, keyPath, certPassword)
-
-	// 5. Peer certificate exchange is not needed when using ENCRYPTION=DISABLED
-	// on the HADR endpoint (which is the case for CLUSTER_TYPE=NONE).
-	// Each replica authenticates with its own certificate, and SQL Server
-	// accepts the connection without verifying the peer's cert.
 
 	return nil
 }

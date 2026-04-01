@@ -175,6 +175,12 @@ func (c *interfaceChecker) BackupCertificate(ctx context.Context, certName, cert
 func (c *interfaceChecker) CreateCertificateFromBackup(ctx context.Context, certName, certPath, keyPath, decryptionPassword string) error {
 	return nil
 }
+func (c *interfaceChecker) GetCertificateBinary(ctx context.Context, certName string) ([]byte, error) {
+	return nil, nil
+}
+func (c *interfaceChecker) CreateCertificateFromBinary(ctx context.Context, certName string, certDER []byte) error {
+	return nil
+}
 func (c *interfaceChecker) CreateLoginFromCertificate(ctx context.Context, loginName, certName string) error {
 	return nil
 }
