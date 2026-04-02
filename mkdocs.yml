@@ -1,0 +1,67 @@
+site_name: MSSQL Kubernetes Operator
+site_url: https://popul.github.io/mssql-k8s-operator
+repo_url: https://github.com/popul/mssql-k8s-operator
+repo_name: popul/mssql-k8s-operator
+edit_uri: edit/main/docs/
+
+theme:
+  name: material
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: blue
+      accent: blue
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: blue
+      accent: blue
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+  features:
+    - navigation.sections
+    - navigation.expand
+    - navigation.top
+    - content.code.copy
+    - content.action.edit
+    - search.suggest
+    - search.highlight
+  icon:
+    repo: fontawesome/brands/github
+
+markdown_extensions:
+  - admonition
+  - pymdownx.details
+  - pymdownx.superfences
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.highlight:
+      line_spans: __span
+  - pymdownx.inlinehilite
+  - tables
+  - toc:
+      permalink: true
+
+nav:
+  - Home: index.md
+  - Getting started: tutorials/getting-started.md
+  - How-to guides:
+      - Install: how-to/install.md
+      - Deploy SQL Server: how-to/deploy-sql-server.md
+      - High availability: how-to/high-availability.md
+      - Manage databases: how-to/manage-databases.md
+      - Manage logins & users: how-to/manage-logins-users.md
+      - Manage schemas & permissions: how-to/manage-schemas-permissions.md
+      - Backup & restore: how-to/backup-restore.md
+      - Version & edition: how-to/sql-server-version-edition.md
+      - Manual deployment: how-to/manual-sql-server-deployment.md
+      - Observability: how-to/observability.md
+      - Troubleshoot: how-to/troubleshoot.md
+  - Reference:
+      - CRD reference: reference/crds.md
+      - Status conditions: reference/status-conditions.md
+      - Helm values: reference/helm-values.md
+  - Architecture: explanation/architecture.md

@@ -133,24 +133,8 @@ EOF
 kubectl get msdb
 ```
 
-## Documentation
-
-**[https://popul.github.io/mssql-k8s-operator](https://popul.github.io/mssql-k8s-operator)**
-
-| | |
-|---|---|
-| [Getting started](https://popul.github.io/mssql-k8s-operator/tutorials/getting-started/) | Deploy the operator and create your first database end-to-end |
-| [Install](https://popul.github.io/mssql-k8s-operator/how-to/install/) | Install, upgrade, and configure the operator |
-| [High availability](https://popul.github.io/mssql-k8s-operator/how-to/high-availability/) | HA cluster with auto-failover and split-brain fencing |
-| [CRD reference](https://popul.github.io/mssql-k8s-operator/reference/crds/) | All CRD fields, types, and defaults |
-| [Architecture](https://popul.github.io/mssql-k8s-operator/explanation/architecture/) | Reconciliation loop, design decisions, security model |
-
 ## Requirements
 
 - Kubernetes 1.27+
 - SQL Server 2019+
 - Helm 3.x
-
-## License
-
-Apache License 2.0
