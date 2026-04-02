@@ -10,8 +10,6 @@ kind: SQLServer
 metadata:
   name: mssql
 spec:
-  credentialsSecret:
-    name: sa-credentials
   instance:
     acceptEULA: true
     edition: Enterprise
@@ -66,6 +64,16 @@ spec:
 - **Protect** data with `deletionPolicy: Retain` by default
 - **Monitor** with auto-failover, health checks, and Prometheus metrics
 
+## Production-grade HA
+
+The operator goes beyond basic failover to handle the hard problems of running SQL Server in Kubernetes:
+
+- **Automatic failover** -- primary goes down, a secondary is promoted within seconds, Services reroute transparently
+- **Split-brain fencing** -- when a former primary restarts and reclaims PRIMARY, the operator detects dual-primary via LSN comparison, immediately cuts traffic to the rogue, and demotes it. Escalates to hard fencing (DROP AG + rejoin) if the replica keeps reclaiming
+- **Self-healing secondaries** -- disconnected or orphaned replicas are automatically rejoined to the AG
+- **Circuit-breaker** -- after repeated fencing failures on the same replica, the operator stops and alerts (prevents infinite loops)
+- **Drift detection** -- if someone changes something directly on SQL Server, the next reconciliation detects and corrects it
+
 ## Custom Resources
 
 | CRD | Short name | Description |
@@ -89,11 +97,9 @@ spec:
 helm install mssql-operator ./charts/mssql-operator \
   --namespace mssql-operator-system --create-namespace
 
-# Create secrets
+# Create secret
 kubectl create secret generic mssql-sa-password \
   --from-literal=MSSQL_SA_PASSWORD='YourStr0ngP@ssword!'
-kubectl create secret generic sa-credentials \
-  --from-literal=username=sa --from-literal=password='YourStr0ngP@ssword!'
 
 # Deploy a managed SQL Server
 cat <<EOF | kubectl apply -f -
@@ -102,8 +108,6 @@ kind: SQLServer
 metadata:
   name: mssql
 spec:
-  credentialsSecret:
-    name: sa-credentials
   instance:
     acceptEULA: true
     saPasswordSecret:

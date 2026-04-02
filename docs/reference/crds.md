@@ -474,6 +474,10 @@ Manages an Always On Availability Group for SQL Server high availability.
 | `databases` | `[]AGDatabaseStatus` | Observed state of each database (sync state, joined) |
 | `autoFailoverCount` | `int32` | Total automatic failovers |
 | `lastAutoFailoverTime` | `*metav1.Time` | Timestamp of last auto-failover |
+| `lastFencingTime` | `*metav1.Time` | Timestamp of last fencing operation |
+| `fencingCount` | `int32` | Total fencing operations (cumulative) |
+| `consecutiveFencingCount` | `int32` | Consecutive fencing attempts on the same replica (resets when a different replica is fenced) |
+| `lastFencedReplica` | `string` | Server name of the last fenced replica |
 
 ### Print columns
 

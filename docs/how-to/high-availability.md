@@ -281,6 +281,53 @@ instance:
 7. It patches pod labels (`mssql.popul.io/role`) so Services route to the new primary immediately
 8. The `failoverCooldown` prevents flapping (no new auto-failover within the cooldown period)
 
+## Split-brain protection (fencing)
+
+With `CLUSTER_TYPE=NONE`, SQL Server has no built-in mechanism to prevent a former primary from reclaiming its role after restart. The operator handles this automatically.
+
+### What happens
+
+When the operator detects **two replicas both reporting PRIMARY**:
+
+1. Traffic is cut immediately -- the rogue's pod label is set to `secondary`, removing it from the read-write Service
+2. The replica with the **highest LSN** (most recent data) is kept as legitimate primary
+3. The rogue is demoted via `ALTER AVAILABILITY GROUP ... SET (ROLE = SECONDARY)`
+4. If the same replica reclaims PRIMARY again, fencing escalates to `DROP AVAILABILITY GROUP` (hard fencing), and the replica is automatically rejoined on the next cycle
+
+### Monitoring fencing
+
+```bash
+# Check fencing status on the AG
+kubectl get msag myag -n mssql -o jsonpath='{.status}' | jq '{
+  primaryReplica, lastFencedReplica, fencingCount,
+  consecutiveFencingCount, lastFencingTime
+}'
+
+# Check events
+kubectl get events -n mssql --field-selector reason=SplitBrainDetected
+kubectl get events -n mssql --field-selector reason=FencingExecuted
+```
+
+### Circuit-breaker
+
+After 5 consecutive fencing attempts on the same replica, the operator stops and sets `Ready=False` with `Reason=FencingExhausted`. This requires manual investigation:
+
+```bash
+# Check if fencing is exhausted
+kubectl get msag myag -n mssql -o jsonpath='{.status.conditions[?(@.reason=="FencingExhausted")]}'
+```
+
+Resolve the root cause (e.g., misconfigured replica, network partition), then the operator resumes normal operation on the next reconciliation.
+
+### When fencing does NOT trigger
+
+- **Single primary differs from status** -- this is a stale status (e.g., DBA ran a manual failover). The operator corrects the status without fencing.
+- **CLUSTER_TYPE=WSFC or External** -- these have their own cluster manager.
+- **AGFailover CR in progress** -- fencing is suspended to avoid conflict.
+- **First deployment** -- `status.primaryReplica` is not yet set.
+
+For architecture details, see [Split-brain fencing](../explanation/architecture.md#split-brain-fencing).
+
 ## Configuration reference
 
 ### Availability Group settings

@@ -106,6 +106,30 @@ Labels are updated in two places for fast convergence:
 
 This dual-write ensures that even if one controller is delayed, the labels converge within a single reconciliation cycle (~10s with auto-failover health checks). Kubernetes endpoints are updated within seconds after labels change, so applications experience minimal routing delay during failover.
 
+## Split-brain fencing
+
+With `CLUSTER_TYPE=NONE` (the default for Kubernetes-based AG deployments), there is no external cluster manager (WSFC, Pacemaker) to prevent a former primary from reclaiming its role after a failover. If the old primary restarts and still considers itself PRIMARY, two pods accept writes simultaneously -- a split-brain.
+
+The operator implements a fencing mechanism to detect and resolve this automatically:
+
+1. **Detection** -- on each reconciliation, the AG controller connects to every replica and collects their current role. If two or more replicas report `PRIMARY`, a split-brain is confirmed.
+2. **Tiebreaker** -- the operator compares the `last_hardened_lsn` (from `sys.dm_hadr_database_replica_states`) of each primary. The replica with the highest LSN has the most recent data and is kept as the legitimate primary.
+3. **Traffic cut** -- the rogue primary's pod label is immediately patched to `role=secondary`, which removes it from the read-write Service endpoints. This happens before any SQL command, minimizing the write conflict window.
+4. **Soft fencing** -- the operator executes `ALTER AVAILABILITY GROUP ... SET (ROLE = SECONDARY)` on the rogue to demote it.
+5. **Hard fencing** -- if the same replica reclaims PRIMARY again within the `failoverCooldown`, the operator escalates to `DROP AVAILABILITY GROUP` on the rogue, then rejoins it as a secondary on the next cycle.
+6. **Circuit-breaker** -- after 5 consecutive fencing attempts on the same replica, the operator stops and sets a `FencingExhausted` condition, requiring human intervention.
+
+The fencing logic is guarded:
+
+- It only runs when `CLUSTER_TYPE=NONE` (WSFC and External have their own managers).
+- It only runs when `status.primaryReplica` is already set (skipped on first deployment).
+- It is suspended while an `AGFailover` CR is in `Running` phase (prevents conflict with manual failovers).
+- Unreachable replicas are excluded from the analysis (not treated as rogue).
+
+When only one replica reports PRIMARY but it differs from `status.primaryReplica`, this is treated as a **stale status** (e.g., a DBA ran a manual failover), not a split-brain. The operator corrects the status and emits a `PrimaryChangedExternally` event without fencing.
+
+Disconnected secondaries (after a crash or hard fencing) are automatically rejoined to the AG via `ALTER AVAILABILITY GROUP ... JOIN` on each reconciliation cycle.
+
 ## Secret watches
 
 The operator watches Kubernetes Secrets in addition to its own CRDs. When a Secret changes, the operator lists all CRs in the same namespace that reference that Secret and re-reconciles them.
