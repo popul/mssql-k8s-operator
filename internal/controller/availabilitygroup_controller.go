@@ -43,6 +43,7 @@ type AvailabilityGroupReconciler struct {
 // +kubebuilder:rbac:groups=mssql.popul.io,resources=availabilitygroups/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=mssql.popul.io,resources=availabilitygroups/finalizers,verbs=update
 // +kubebuilder:rbac:groups=coordination.k8s.io,resources=leases,verbs=get;list;watch;create;update;patch
+// +kubebuilder:rbac:groups=mssql.popul.io,resources=agfailovers,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=pods,verbs=get;list;watch;patch
 
 func (r *AvailabilityGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
@@ -86,8 +87,16 @@ func (r *AvailabilityGroupReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		requeue = healthCheckInterval
 	}
 
-	// 4. Connect to the primary replica (first replica in the spec)
+	// 4. Connect to the primary replica (known from status, fallback to first in spec)
 	primaryReplica := ag.Spec.Replicas[0]
+	if ag.Status.PrimaryReplica != "" {
+		for i := range ag.Spec.Replicas {
+			if ag.Spec.Replicas[i].ServerName == ag.Status.PrimaryReplica {
+				primaryReplica = ag.Spec.Replicas[i]
+				break
+			}
+		}
+	}
 	username, password, err := getCredentialsFromSecret(ctx, r.Client, ag.Namespace, primaryReplica.Server.CredentialsSecret.Name)
 	if err != nil {
 		if apierrors.IsNotFound(err) {
@@ -129,7 +138,22 @@ func (r *AvailabilityGroupReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		pingCancel()
 	}
 
-	// 4. Ensure HADR endpoint exists on primary
+	// 4b. Fencing: detect and resolve split-brain
+	if ag.Status.PrimaryReplica != "" {
+		previousPrimary := ag.Status.PrimaryReplica
+		fenced, fenceErr := r.detectAndResolveSplitBrain(ctx, &ag)
+		if fenceErr != nil {
+			logger.Error(fenceErr, "fencing check failed")
+		}
+		if fenced {
+			return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
+		}
+		if ag.Status.PrimaryReplica != previousPrimary {
+			return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
+		}
+	}
+
+	// 5. Ensure HADR endpoint exists on primary
 	sqlCtx, cancel := sqlContext(ctx)
 	defer cancel()
 
@@ -191,6 +215,22 @@ func (r *AvailabilityGroupReconciler) Reconcile(ctx context.Context, req ctrl.Re
 
 	if err := r.updateAGStatus(ctx, &ag, agStatus); err != nil {
 		return ctrl.Result{}, err
+	}
+
+	// Rejoin disconnected/orphan secondaries
+	agStatusMap := make(map[string]sqlclient.AGReplicaState)
+	for _, rs := range agStatus.Replicas {
+		agStatusMap[rs.ServerName] = rs
+	}
+	for _, specReplica := range ag.Spec.Replicas {
+		if specReplica.ServerName == agStatus.PrimaryReplica {
+			continue
+		}
+		rs, found := agStatusMap[specReplica.ServerName]
+		if found && rs.Connected {
+			continue
+		}
+		r.tryRejoinReplica(ctx, &ag, specReplica)
 	}
 
 	// Keep pod role labels in sync with actual AG state
@@ -456,8 +496,16 @@ func (r *AvailabilityGroupReconciler) handleDeletion(ctx context.Context, ag *v1
 		return ctrl.Result{}, nil
 	}
 
-	// Drop the AG on the primary
+	// Drop the AG on the primary (use known primary, fallback to first replica)
 	primaryReplica := ag.Spec.Replicas[0]
+	if ag.Status.PrimaryReplica != "" {
+		for i := range ag.Spec.Replicas {
+			if ag.Spec.Replicas[i].ServerName == ag.Status.PrimaryReplica {
+				primaryReplica = ag.Spec.Replicas[i]
+				break
+			}
+		}
+	}
 	username, password, err := getCredentialsFromSecret(ctx, r.Client, ag.Namespace, primaryReplica.Server.CredentialsSecret.Name)
 	if err != nil {
 		logger.Error(err, "failed to get credentials for cleanup, removing finalizer anyway")
@@ -586,8 +634,15 @@ func (r *AvailabilityGroupReconciler) handleAutoFailover(ctx context.Context, ag
 		return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
 	}
 
-	// Try each secondary replica to find one we can connect to
-	for i := 1; i < len(ag.Spec.Replicas); i++ {
+	// Try each replica (except the known primary) to find one we can connect to
+	knownPrimary := ag.Status.PrimaryReplica
+	if knownPrimary == "" {
+		knownPrimary = ag.Spec.Replicas[0].ServerName
+	}
+	for i := 0; i < len(ag.Spec.Replicas); i++ {
+		if ag.Spec.Replicas[i].ServerName == knownPrimary {
+			continue
+		}
 		replica := ag.Spec.Replicas[i]
 		u, p, err := getCredentialsFromSecret(ctx, r.Client, ag.Namespace, replica.Server.CredentialsSecret.Name)
 		if err != nil {

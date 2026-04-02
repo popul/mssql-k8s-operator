@@ -67,6 +67,8 @@ type SQLClient interface {
 	FailoverAG(ctx context.Context, agName string) error
 	ForceFailoverAG(ctx context.Context, agName string) error
 	GetAGReplicaRole(ctx context.Context, agName, serverName string) (string, error)
+	SetAGRoleSecondary(ctx context.Context, agName string) error
+	GetLastHardenedLSN(ctx context.Context, agName string) (int64, error)
 	CreateHADREndpoint(ctx context.Context, port int) error
 	HADREndpointExists(ctx context.Context) (bool, error)
 

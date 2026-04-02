@@ -62,6 +62,8 @@ type MockClient struct {
 	// MethodErrors allows injecting errors for specific methods.
 	// Key is the method name (e.g. "CreateDatabase"), value is the error to return.
 	MethodErrors map[string]error
+	// MockLSN is the value returned by GetLastHardenedLSN. Default 0.
+	MockLSN int64
 }
 
 // NewMockClient creates a new MockClient.
@@ -977,6 +979,47 @@ func (m *MockClient) GetAGReplicaRole(_ context.Context, agName, serverName stri
 		}
 	}
 	return "", fmt.Errorf("replica %s not found in AG %s", serverName, agName)
+}
+
+func (m *MockClient) SetAGRoleSecondary(_ context.Context, agName string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.track("SetAGRoleSecondary")
+	if err := m.checkConnect(); err != nil {
+		return err
+	}
+	if err := m.checkMethodError("SetAGRoleSecondary"); err != nil {
+		return err
+	}
+	if ag, ok := m.ags[agName]; ok {
+		for i := range ag.Replicas {
+			if ag.Replicas[i].Role == "PRIMARY" {
+				ag.Replicas[i].Role = "SECONDARY"
+			}
+		}
+	}
+	return nil
+}
+
+func (m *MockClient) GetLastHardenedLSN(_ context.Context, agName string) (int64, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.track("GetLastHardenedLSN")
+	if err := m.checkConnect(); err != nil {
+		return 0, err
+	}
+	if err := m.checkMethodError("GetLastHardenedLSN"); err != nil {
+		return 0, err
+	}
+	return m.MockLSN, nil
+}
+
+// GetMockAG returns the internal MockAG for a given AG name, for test assertions.
+func (m *MockClient) GetMockAG(agName string) (*MockAG, bool) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	ag, ok := m.ags[agName]
+	return ag, ok
 }
 
 func (m *MockClient) DropAG(_ context.Context, agName string) error {

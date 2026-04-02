@@ -214,6 +214,25 @@ type AvailabilityGroupStatus struct {
 	// AutoFailoverCount is the total number of automatic failovers executed.
 	// +optional
 	AutoFailoverCount int32 `json:"autoFailoverCount,omitempty"`
+
+	// LastFencingTime records when the last fencing operation was executed.
+	// +optional
+	LastFencingTime *metav1.Time `json:"lastFencingTime,omitempty"`
+
+	// FencingCount is the total number of fencing operations executed (cumulative).
+	// +optional
+	FencingCount int32 `json:"fencingCount,omitempty"`
+
+	// ConsecutiveFencingCount tracks how many times the same replica (LastFencedReplica)
+	// has been fenced consecutively. Resets to 1 when a different replica is fenced.
+	// Used by the circuit-breaker to detect infinite fencing loops.
+	// +optional
+	ConsecutiveFencingCount int32 `json:"consecutiveFencingCount,omitempty"`
+
+	// LastFencedReplica is the server name of the last replica that was fenced.
+	// Used with LastFencingTime to detect repeated re-claims and escalate to hard fencing.
+	// +optional
+	LastFencedReplica string `json:"lastFencedReplica,omitempty"`
 }
 
 // +kubebuilder:object:root=true

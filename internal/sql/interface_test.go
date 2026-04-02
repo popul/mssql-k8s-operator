@@ -157,6 +157,10 @@ func (c *interfaceChecker) ForceFailoverAG(ctx context.Context, agName string) e
 func (c *interfaceChecker) GetAGReplicaRole(ctx context.Context, agName, serverName string) (string, error) {
 	return "", nil
 }
+func (c *interfaceChecker) SetAGRoleSecondary(ctx context.Context, agName string) error { return nil }
+func (c *interfaceChecker) GetLastHardenedLSN(ctx context.Context, agName string) (int64, error) {
+	return 0, nil
+}
 func (c *interfaceChecker) CreateHADREndpoint(ctx context.Context, port int) error { return nil }
 func (c *interfaceChecker) HADREndpointExists(ctx context.Context) (bool, error) {
 	return false, nil

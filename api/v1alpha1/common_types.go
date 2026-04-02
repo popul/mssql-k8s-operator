@@ -76,6 +76,12 @@ const (
 	ReasonEULANotAccepted             = "EULANotAccepted"
 	ReasonCertificatesProvisioning    = "CertificatesProvisioning"
 	ReasonAGProvisioning              = "AGProvisioning"
+	ReasonSplitBrainDetected          = "SplitBrainDetected"
+	ReasonFencingExecuted             = "FencingExecuted"
+	ReasonHardFencingExecuted         = "HardFencingExecuted"
+	ReasonFencingFailed               = "FencingFailed"
+	ReasonFencingExhausted            = "FencingExhausted"
+	ReasonPrimaryChangedExternally    = "PrimaryChangedExternally"
 )
 
 // Finalizer name used by all CRDs in this operator.

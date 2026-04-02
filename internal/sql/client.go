@@ -698,6 +698,29 @@ func (c *MSSQLClient) GetAGReplicaRole(ctx context.Context, agName, serverName s
 	return role, nil
 }
 
+func (c *MSSQLClient) SetAGRoleSecondary(ctx context.Context, agName string) error {
+	query := fmt.Sprintf("ALTER AVAILABILITY GROUP %s SET (ROLE = SECONDARY)", QuoteName(agName))
+	_, err := c.db.ExecContext(ctx, query)
+	if err != nil {
+		return fmt.Errorf("failed to set AG %s role to secondary: %w", agName, err)
+	}
+	return nil
+}
+
+func (c *MSSQLClient) GetLastHardenedLSN(ctx context.Context, agName string) (int64, error) {
+	var lsn int64
+	err := c.db.QueryRowContext(ctx,
+		`SELECT TOP 1 ISNULL(drs.last_hardened_lsn, 0)
+		 FROM sys.dm_hadr_database_replica_states drs
+		 JOIN sys.availability_groups ag ON drs.group_id = ag.group_id
+		 WHERE ag.name = @p1 AND drs.is_local = 1
+		 ORDER BY drs.last_hardened_lsn DESC`, agName).Scan(&lsn)
+	if err != nil {
+		return 0, fmt.Errorf("failed to get last hardened LSN for AG %s: %w", agName, err)
+	}
+	return lsn, nil
+}
+
 func (c *MSSQLClient) DropAG(ctx context.Context, agName string) error {
 	query := fmt.Sprintf("DROP AVAILABILITY GROUP %s", QuoteName(agName))
 	_, err := c.db.ExecContext(ctx, query)

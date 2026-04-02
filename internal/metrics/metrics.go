@@ -99,6 +99,16 @@ var (
 		[]string{"name", "namespace", "host"},
 	)
 
+	// FencingTotal counts fencing actions to resolve split-brain.
+	FencingTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "mssql_operator",
+			Name:      "fencing_total",
+			Help:      "Total fencing actions to resolve split-brain",
+		},
+		[]string{"ag_name", "namespace", "fenced_replica", "type"},
+	)
+
 	// LoginCount tracks the number of managed logins.
 	LoginCount = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
@@ -120,6 +130,7 @@ func init() {
 		BackupLastSuccess,
 		BackupTotal,
 		AGReplicaLag,
+		FencingTotal,
 		SQLServerConnected,
 		LoginCount,
 	)
