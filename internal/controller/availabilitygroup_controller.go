@@ -141,10 +141,7 @@ func (r *AvailabilityGroupReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	// 4b. Fencing: detect and resolve split-brain
 	if ag.Status.PrimaryReplica != "" {
 		previousPrimary := ag.Status.PrimaryReplica
-		fenced, fenceErr := r.detectAndResolveSplitBrain(ctx, &ag)
-		if fenceErr != nil {
-			logger.Error(fenceErr, "fencing check failed")
-		}
+		fenced := r.detectAndResolveSplitBrain(ctx, &ag)
 		if fenced {
 			return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
 		}
@@ -222,15 +219,15 @@ func (r *AvailabilityGroupReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	for _, rs := range agStatus.Replicas {
 		agStatusMap[rs.ServerName] = rs
 	}
-	for _, specReplica := range ag.Spec.Replicas {
-		if specReplica.ServerName == agStatus.PrimaryReplica {
+	for i := range ag.Spec.Replicas {
+		if ag.Spec.Replicas[i].ServerName == agStatus.PrimaryReplica {
 			continue
 		}
-		rs, found := agStatusMap[specReplica.ServerName]
+		rs, found := agStatusMap[ag.Spec.Replicas[i].ServerName]
 		if found && rs.Connected {
 			continue
 		}
-		r.tryRejoinReplica(ctx, &ag, specReplica)
+		r.tryRejoinReplica(ctx, &ag, &ag.Spec.Replicas[i])
 	}
 
 	// Keep pod role labels in sync with actual AG state
@@ -775,9 +772,9 @@ func (r *AvailabilityGroupReconciler) tryAcquireLease(ctx context.Context, names
 func (r *AvailabilityGroupReconciler) updateReplicaRoleLabelsFromAG(ctx context.Context, ag *v1alpha1.AvailabilityGroup, primaryServerName string) {
 	logger := log.FromContext(ctx)
 
-	for _, replica := range ag.Spec.Replicas {
+	for i := range ag.Spec.Replicas {
 		// The ServerName is typically a short pod name like "sql-0"
-		podName := replica.ServerName
+		podName := ag.Spec.Replicas[i].ServerName
 
 		var pod corev1.Pod
 		if err := r.Get(ctx, types.NamespacedName{Name: podName, Namespace: ag.Namespace}, &pod); err != nil {

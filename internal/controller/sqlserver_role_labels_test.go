@@ -400,4 +400,3 @@ func TestManagedReconcile_MultiReplica_LabelsAppliedAfterAG(t *testing.T) {
 		t.Errorf("expected mssql-1 to be secondary, got %q", gotPod1.Labels[LabelRole])
 	}
 }
-

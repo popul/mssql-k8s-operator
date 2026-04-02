@@ -289,15 +289,16 @@ func (r *SQLServerReconciler) distributeCertificatesToSQL(ctx context.Context, s
 	// In managed mode without credentialsSecret, fall back to sa + saPasswordSecret.
 	var username, password string
 	var err error
-	if srv.Spec.CredentialsSecret != nil {
+	switch {
+	case srv.Spec.CredentialsSecret != nil:
 		secretNS := srv.Namespace
 		if srv.Spec.CredentialsSecret.Namespace != nil {
 			secretNS = *srv.Spec.CredentialsSecret.Namespace
 		}
 		username, password, err = getCredentialsFromSecret(ctx, r.Client, secretNS, srv.Spec.CredentialsSecret.Name)
-	} else if inst.SAPasswordSecret.Name != "" {
+	case inst.SAPasswordSecret.Name != "":
 		username, password, err = getCredentialsFromSAPasswordSecret(ctx, r.Client, srv.Namespace, inst.SAPasswordSecret.Name)
-	} else {
+	default:
 		return fmt.Errorf("no credentials available: set credentialsSecret or saPasswordSecret")
 	}
 	if err != nil {

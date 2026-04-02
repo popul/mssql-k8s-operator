@@ -14,7 +14,7 @@ No external SQL Server is needed -- the operator deploys one for you.
 ## Step 1: Install the operator
 
 ```bash
-helm install mssql-operator ./charts/mssql-operator \
+helm install mssql-operator oci://ghcr.io/popul/mssql-k8s-operator/charts/mssql-operator \
   --namespace mssql-operator-system \
   --create-namespace
 ```

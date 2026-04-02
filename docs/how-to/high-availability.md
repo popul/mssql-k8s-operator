@@ -232,7 +232,16 @@ When `mssql-0` restarts (automatic via the StatefulSet), it rejoins as a seconda
 
 ## Manual failover
 
-For planned maintenance, use the `AGFailover` CR:
+For planned maintenance, use the `AGFailover` CR. First, create a credentials secret (AGFailover uses inline connection, not `sqlServerRef`):
+
+```bash
+kubectl create secret generic sa-credentials \
+  --from-literal=username=sa \
+  --from-literal=password='YourStr0ngP@ssword!' \
+  -n mssql
+```
+
+Then apply the failover:
 
 ```yaml
 apiVersion: mssql.popul.io/v1alpha1

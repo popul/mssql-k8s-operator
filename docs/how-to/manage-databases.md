@@ -25,7 +25,7 @@ kubectl get msdb myapp-db
 > server:
 >   host: mssql.database.svc.cluster.local
 >   credentialsSecret:
->     name: mssql-sa-credentials
+>     name: sa-credentials
 > ```
 
 ## Set a collation

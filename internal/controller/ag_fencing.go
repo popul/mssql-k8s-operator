@@ -21,10 +21,11 @@ const maxFencingAttempts = 5
 // Unreachable replicas are mapped to "" (empty string).
 func (r *AvailabilityGroupReconciler) collectReplicaRoles(
 	ctx context.Context, ag *v1alpha1.AvailabilityGroup,
-) (map[string]string, error) {
+) map[string]string {
 	roles := make(map[string]string, len(ag.Spec.Replicas))
 
-	for _, replica := range ag.Spec.Replicas {
+	for i := range ag.Spec.Replicas {
+		replica := &ag.Spec.Replicas[i]
 		username, password, err := getCredentialsFromSecret(ctx, r.Client, ag.Namespace, replica.Server.CredentialsSecret.Name)
 		if err != nil {
 			roles[replica.ServerName] = ""
@@ -49,7 +50,7 @@ func (r *AvailabilityGroupReconciler) collectReplicaRoles(
 		roles[replica.ServerName] = role
 	}
 
-	return roles, nil
+	return roles
 }
 
 // collectReplicaLSNs returns the last hardened LSN for each candidate replica.
@@ -57,10 +58,11 @@ func (r *AvailabilityGroupReconciler) collectReplicaRoles(
 func (r *AvailabilityGroupReconciler) collectReplicaLSNs(
 	ctx context.Context, ag *v1alpha1.AvailabilityGroup,
 	candidates []v1alpha1.AGReplicaSpec,
-) (map[string]int64, error) {
+) map[string]int64 {
 	lsns := make(map[string]int64, len(candidates))
 
-	for _, replica := range candidates {
+	for i := range candidates {
+		replica := &candidates[i]
 		username, password, err := getCredentialsFromSecret(ctx, r.Client, ag.Namespace, replica.Server.CredentialsSecret.Name)
 		if err != nil {
 			lsns[replica.ServerName] = 0
@@ -85,24 +87,24 @@ func (r *AvailabilityGroupReconciler) collectReplicaLSNs(
 		lsns[replica.ServerName] = lsn
 	}
 
-	return lsns, nil
+	return lsns
 }
 
 // detectAndResolveSplitBrain checks all replicas for role conflicts and resolves them.
 // Returns true if fencing was performed (caller should return early and requeue).
 func (r *AvailabilityGroupReconciler) detectAndResolveSplitBrain(
 	ctx context.Context, ag *v1alpha1.AvailabilityGroup,
-) (fenced bool, err error) {
+) (fenced bool) {
 	logger := log.FromContext(ctx)
 
 	// Guard 1: no primary known yet (first deployment)
 	if ag.Status.PrimaryReplica == "" {
-		return false, nil
+		return false
 	}
 
 	// Guard 2: fencing only applies to CLUSTER_TYPE=NONE
 	if ag.Spec.ClusterType != nil && *ag.Spec.ClusterType != "None" {
-		return false, nil
+		return false
 	}
 
 	// Guard 3: skip if an AGFailover CR is running
@@ -111,34 +113,31 @@ func (r *AvailabilityGroupReconciler) detectAndResolveSplitBrain(
 		for i := range failovers.Items {
 			if failovers.Items[i].Spec.AGName == ag.Spec.AGName &&
 				failovers.Items[i].Status.Phase == v1alpha1.FailoverPhaseRunning {
-				return false, nil
+				return false
 			}
 		}
 	}
 
 	// Step 5: collect actual roles from each replica
-	roles, err := r.collectReplicaRoles(ctx, ag)
-	if err != nil {
-		return false, fmt.Errorf("failed to collect replica roles: %w", err)
-	}
+	roles := r.collectReplicaRoles(ctx, ag)
 
 	// Step 6: identify primaries (exclude unreachable replicas)
 	var primaries []v1alpha1.AGReplicaSpec
-	for _, replica := range ag.Spec.Replicas {
-		if roles[replica.ServerName] == "PRIMARY" {
-			primaries = append(primaries, replica)
+	for i := range ag.Spec.Replicas {
+		if roles[ag.Spec.Replicas[i].ServerName] == "PRIMARY" {
+			primaries = append(primaries, ag.Spec.Replicas[i])
 		}
 	}
 
 	// Step 7: no primary found → nothing to do
 	if len(primaries) == 0 {
-		return false, nil
+		return false
 	}
 
 	// Step 8: single primary
 	if len(primaries) == 1 {
 		if primaries[0].ServerName == ag.Status.PrimaryReplica {
-			return false, nil // all good
+			return false // all good
 		}
 		// Status stale — correct in-place (no Status().Patch here, caller handles it)
 		logger.Info("primary changed externally, correcting status",
@@ -147,7 +146,7 @@ func (r *AvailabilityGroupReconciler) detectAndResolveSplitBrain(
 		r.updateReplicaRoleLabelsFromAG(ctx, ag, primaries[0].ServerName)
 		r.Recorder.Event(ag, corev1.EventTypeNormal, v1alpha1.ReasonPrimaryChangedExternally,
 			fmt.Sprintf("Primary changed externally to %s", primaries[0].ServerName))
-		return false, nil
+		return false
 	}
 
 	// Step 9: 2+ primaries → REAL SPLIT-BRAIN
@@ -161,30 +160,30 @@ func (r *AvailabilityGroupReconciler) detectAndResolveSplitBrain(
 	}
 
 	// Determine the legitimate primary via LSN tiebreaker
-	lsns, _ := r.collectReplicaLSNs(ctx, ag, primaries)
+	lsns := r.collectReplicaLSNs(ctx, ag, primaries)
 
-	legitimate := primaries[0]
+	legitimateIdx := 0
 	highestLSN := lsns[primaries[0].ServerName]
-	for _, p := range primaries[1:] {
-		pLSN := lsns[p.ServerName]
+	for i := 1; i < len(primaries); i++ {
+		pLSN := lsns[primaries[i].ServerName]
 		if pLSN > highestLSN {
-			legitimate = p
+			legitimateIdx = i
 			highestLSN = pLSN
-		} else if pLSN == highestLSN && p.ServerName == ag.Status.PrimaryReplica {
-			// Equal LSN → prefer the one matching current status
-			legitimate = p
+		} else if pLSN == highestLSN && primaries[i].ServerName == ag.Status.PrimaryReplica {
+			legitimateIdx = i
 		}
 	}
+	legitimate := &primaries[legitimateIdx]
 
 	// Build rogue list
-	var rogues []v1alpha1.AGReplicaSpec
+	rogues := make([]int, 0, len(primaries)-1)
 	allExhausted := true
-	for _, p := range primaries {
-		if p.ServerName == legitimate.ServerName {
+	for i := range primaries {
+		if primaries[i].ServerName == legitimate.ServerName {
 			continue
 		}
 		// Check circuit-breaker for this specific rogue
-		isExhausted := ag.Status.LastFencedReplica == p.ServerName &&
+		isExhausted := ag.Status.LastFencedReplica == primaries[i].ServerName &&
 			ag.Status.ConsecutiveFencingCount >= maxFencingAttempts &&
 			ag.Status.LastFencingTime != nil &&
 			time.Since(ag.Status.LastFencingTime.Time) < cooldown
@@ -192,7 +191,7 @@ func (r *AvailabilityGroupReconciler) detectAndResolveSplitBrain(
 			continue
 		}
 		allExhausted = false
-		rogues = append(rogues, p)
+		rogues = append(rogues, i)
 	}
 
 	if len(rogues) == 0 {
@@ -208,16 +207,17 @@ func (r *AvailabilityGroupReconciler) detectAndResolveSplitBrain(
 			})
 			_ = r.Status().Patch(ctx, ag, patch)
 		}
-		return false, nil
+		return false
 	}
 
 	r.Recorder.Event(ag, corev1.EventTypeWarning, v1alpha1.ReasonSplitBrainDetected,
 		fmt.Sprintf("Split-brain detected: %d primaries, legitimate=%s", len(primaries), legitimate.ServerName))
 
 	// Step 10: fence each rogue
-	var lastRogue v1alpha1.AGReplicaSpec
-	for _, rogue := range rogues {
-		lastRogue = rogue
+	var lastRogueIdx int
+	for _, ri := range rogues {
+		rogue := &primaries[ri]
+		lastRogueIdx = ri
 
 		// 10a: immediately remove primary label (cut traffic before SQL fencing)
 		r.setPodRoleLabel(ctx, ag.Namespace, rogue.ServerName, RoleSecondary)
@@ -236,6 +236,7 @@ func (r *AvailabilityGroupReconciler) detectAndResolveSplitBrain(
 	}
 
 	// Step 11: patch status (single Status().Patch call)
+	lastRogue := &primaries[lastRogueIdx]
 	patch := client.MergeFrom(ag.DeepCopy())
 	ag.Status.PrimaryReplica = legitimate.ServerName
 	now := metav1.Now()
@@ -249,16 +250,9 @@ func (r *AvailabilityGroupReconciler) detectAndResolveSplitBrain(
 	ag.Status.LastFencedReplica = lastRogue.ServerName
 
 	reason := v1alpha1.ReasonFencingExecuted
-	// Check if any hard fencing was done
-	for _, rogue := range rogues {
-		if ag.Status.LastFencedReplica == rogue.ServerName &&
-			ag.Status.LastFencingTime != nil {
-			// If this was a hard fence, use the hard reason
-			// (simplified: use hard reason if consecutive count > 1)
-			if ag.Status.ConsecutiveFencingCount > 1 {
-				reason = v1alpha1.ReasonHardFencingExecuted
-			}
-		}
+	// Use hard reason if consecutive count > 1
+	if ag.Status.ConsecutiveFencingCount > 1 {
+		reason = v1alpha1.ReasonHardFencingExecuted
 	}
 
 	meta.SetStatusCondition(&ag.Status.Conditions, metav1.Condition{
@@ -270,13 +264,13 @@ func (r *AvailabilityGroupReconciler) detectAndResolveSplitBrain(
 	})
 	_ = r.Status().Patch(ctx, ag, patch)
 
-	return true, nil
+	return true
 }
 
 // fenceReplica executes soft or hard fencing on a single replica.
 func (r *AvailabilityGroupReconciler) fenceReplica(
 	ctx context.Context, ag *v1alpha1.AvailabilityGroup,
-	replica v1alpha1.AGReplicaSpec, hard bool,
+	replica *v1alpha1.AGReplicaSpec, hard bool,
 ) error {
 	logger := log.FromContext(ctx)
 
@@ -336,7 +330,7 @@ func (r *AvailabilityGroupReconciler) setPodRoleLabel(ctx context.Context, names
 // tryRejoinReplica attempts to rejoin a disconnected or orphaned replica to the AG.
 func (r *AvailabilityGroupReconciler) tryRejoinReplica(
 	ctx context.Context, ag *v1alpha1.AvailabilityGroup,
-	replica v1alpha1.AGReplicaSpec,
+	replica *v1alpha1.AGReplicaSpec,
 ) {
 	logger := log.FromContext(ctx)
 

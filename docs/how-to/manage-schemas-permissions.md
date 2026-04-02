@@ -27,7 +27,7 @@ kubectl get msschema
 > server:
 >   host: mssql.database.svc.cluster.local
 >   credentialsSecret:
->     name: mssql-sa-credentials
+>     name: sa-credentials
 > ```
 
 ## Change schema owner

@@ -238,16 +238,17 @@ func (r *SQLServerReconciler) probeAndUpdateStatus(ctx context.Context, srv *v1a
 	var username, password string
 	var err error
 
-	if srv.Spec.CredentialsSecret != nil {
+	switch {
+	case srv.Spec.CredentialsSecret != nil:
 		secretNS := srv.Namespace
 		if srv.Spec.CredentialsSecret.Namespace != nil {
 			secretNS = *srv.Spec.CredentialsSecret.Namespace
 		}
 		username, password, err = getCredentialsFromSecret(ctx, r.Client, secretNS, srv.Spec.CredentialsSecret.Name)
-	} else if srv.Spec.Instance != nil {
+	case srv.Spec.Instance != nil:
 		// Managed mode fallback: use sa + saPasswordSecret
 		username, password, err = getCredentialsFromSAPasswordSecret(ctx, r.Client, srv.Namespace, srv.Spec.Instance.SAPasswordSecret.Name)
-	} else {
+	default:
 		return r.setConditionAndReturn(ctx, srv, metav1.ConditionFalse, v1alpha1.ReasonSecretNotFound,
 			"credentialsSecret is required for SqlLogin auth in external mode")
 	}

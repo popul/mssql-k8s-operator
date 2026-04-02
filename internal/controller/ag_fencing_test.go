@@ -117,10 +117,7 @@ func TestFencing_NoPrimaryInStatus(t *testing.T) {
 		"sql-0": mock0, "sql-1": mock1,
 	})
 
-	fenced, err := r.detectAndResolveSplitBrain(context.Background(), ag)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
+	fenced := r.detectAndResolveSplitBrain(context.Background(), ag)
 	if fenced {
 		t.Error("expected no fencing when status.PrimaryReplica is empty")
 	}
@@ -137,10 +134,7 @@ func TestFencing_ClusterTypeWSFC_Skip(t *testing.T) {
 		"sql-0": mock0,
 	})
 
-	fenced, err := r.detectAndResolveSplitBrain(context.Background(), ag)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
+	fenced := r.detectAndResolveSplitBrain(context.Background(), ag)
 	if fenced {
 		t.Error("expected no fencing for ClusterType=WSFC")
 	}
@@ -154,10 +148,7 @@ func TestFencing_ClusterTypeExternal_Skip(t *testing.T) {
 		"sql-0": mock0,
 	})
 
-	fenced, err := r.detectAndResolveSplitBrain(context.Background(), ag)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
+	fenced := r.detectAndResolveSplitBrain(context.Background(), ag)
 	if fenced {
 		t.Error("expected no fencing for ClusterType=External")
 	}
@@ -185,10 +176,7 @@ func TestFencing_AGFailoverRunning_Skip(t *testing.T) {
 	// Manually set the AGFailover status (fake client requires explicit status write)
 	_ = r.Client.Status().Update(context.Background(), fo)
 
-	fenced, err := r.detectAndResolveSplitBrain(context.Background(), ag)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
+	fenced := r.detectAndResolveSplitBrain(context.Background(), ag)
 	if fenced {
 		t.Error("expected no fencing when AGFailover is Running")
 	}
@@ -208,10 +196,7 @@ func TestFencing_FencingExhausted_Skip(t *testing.T) {
 		"sql-0": mock0, "sql-1": mock1,
 	})
 
-	fenced, err := r.detectAndResolveSplitBrain(context.Background(), ag)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
+	fenced := r.detectAndResolveSplitBrain(context.Background(), ag)
 	if fenced {
 		t.Error("expected no fencing when exhausted")
 	}
@@ -234,10 +219,7 @@ func TestFencing_SinglePrimary_MatchesStatus(t *testing.T) {
 		"sql-0": mock0, "sql-1": mock1,
 	})
 
-	fenced, err := r.detectAndResolveSplitBrain(context.Background(), ag)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
+	fenced := r.detectAndResolveSplitBrain(context.Background(), ag)
 	if fenced {
 		t.Error("expected no fencing when single primary matches status")
 	}
@@ -256,10 +238,7 @@ func TestFencing_AllSecondary_NoFencing(t *testing.T) {
 		"sql-0": mock0, "sql-1": mock1,
 	})
 
-	fenced, err := r.detectAndResolveSplitBrain(context.Background(), ag)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
+	fenced := r.detectAndResolveSplitBrain(context.Background(), ag)
 	if fenced {
 		t.Error("expected no fencing when all replicas are SECONDARY")
 	}
@@ -278,10 +257,7 @@ func TestFencing_ReplicaUnreachable_ExcludedFromAnalysis(t *testing.T) {
 		"sql-0": mock0, "sql-1": mock1,
 	})
 
-	fenced, err := r.detectAndResolveSplitBrain(context.Background(), ag)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
+	fenced := r.detectAndResolveSplitBrain(context.Background(), ag)
 	if fenced {
 		t.Error("expected no fencing — unreachable replica excluded, single PRIMARY matches status")
 	}
@@ -307,10 +283,7 @@ func TestFencing_StatusStale_UpdatesStatusAndLabels(t *testing.T) {
 		"sql-0": mock0, "sql-1": mock1,
 	})
 
-	fenced, err := r.detectAndResolveSplitBrain(context.Background(), ag)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
+	fenced := r.detectAndResolveSplitBrain(context.Background(), ag)
 	if fenced {
 		t.Error("expected fenced=false for status stale (not a split-brain)")
 	}
@@ -346,7 +319,7 @@ func TestFencing_StatusStale_ReturnEarlyIfWrongNode(t *testing.T) {
 
 	// Simulate the calling code pattern
 	previousPrimary := ag.Status.PrimaryReplica
-	_, _ = r.detectAndResolveSplitBrain(context.Background(), ag)
+	_ = r.detectAndResolveSplitBrain(context.Background(), ag)
 
 	if ag.Status.PrimaryReplica == previousPrimary {
 		t.Error("expected status.PrimaryReplica to have changed (stale correction)")
@@ -378,10 +351,7 @@ func TestFencing_DualPrimary_FencesLowerLSN(t *testing.T) {
 		"sql-0": mock0, "sql-1": mock1,
 	})
 
-	fenced, err := r.detectAndResolveSplitBrain(context.Background(), ag)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
+	fenced := r.detectAndResolveSplitBrain(context.Background(), ag)
 	if !fenced {
 		t.Error("expected fencing on dual-primary")
 	}
@@ -412,10 +382,7 @@ func TestFencing_DualPrimary_EqualLSN_KeepsStatus(t *testing.T) {
 		"sql-0": mock0, "sql-1": mock1,
 	})
 
-	fenced, err := r.detectAndResolveSplitBrain(context.Background(), ag)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
+	fenced := r.detectAndResolveSplitBrain(context.Background(), ag)
 	if !fenced {
 		t.Error("expected fencing on dual-primary")
 	}
@@ -452,10 +419,7 @@ func TestFencing_DualPrimary_StatusNotInPrimaries(t *testing.T) {
 		"sql-0": mock0, "sql-1": mock1, "sql-2": mockDead,
 	})
 
-	fenced, err := r.detectAndResolveSplitBrain(context.Background(), ag)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
+	fenced := r.detectAndResolveSplitBrain(context.Background(), ag)
 	if !fenced {
 		t.Error("expected fencing on dual-primary")
 	}
@@ -493,10 +457,7 @@ func TestFencing_TriplePrimary_FencesAllButBestLSN(t *testing.T) {
 		"sql-0": mock0, "sql-1": mock1, "sql-2": mock2,
 	})
 
-	fenced, err := r.detectAndResolveSplitBrain(context.Background(), ag)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
+	fenced := r.detectAndResolveSplitBrain(context.Background(), ag)
 	if !fenced {
 		t.Error("expected fencing on triple-primary")
 	}
@@ -576,7 +537,7 @@ func TestFencing_LabelRemovedEvenIfSQLFails(t *testing.T) {
 		"sql-0": mock0, "sql-1": mock1,
 	})
 
-	fenced, _ := r.detectAndResolveSplitBrain(context.Background(), ag)
+	fenced := r.detectAndResolveSplitBrain(context.Background(), ag)
 
 	if !fenced {
 		t.Error("expected fenced=true even if SQL fails (label was removed)")
@@ -635,10 +596,7 @@ func TestFencing_Idempotent(t *testing.T) {
 		"sql-0": mock0, "sql-1": mock1,
 	})
 
-	fenced, err := r.detectAndResolveSplitBrain(context.Background(), ag)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
+	fenced := r.detectAndResolveSplitBrain(context.Background(), ag)
 	if fenced {
 		t.Error("expected no fencing when sql-0 is already SECONDARY")
 	}
@@ -659,7 +617,7 @@ func TestFencing_Rejoin_DisconnectedSecondary(t *testing.T) {
 	})
 
 	replica := ag.Spec.Replicas[1]
-	r.tryRejoinReplica(context.Background(), ag, replica)
+	r.tryRejoinReplica(context.Background(), ag, &replica)
 
 	if !mock1.WasCalled("JoinAG") {
 		t.Error("expected JoinAG called for disconnected secondary")
@@ -678,7 +636,7 @@ func TestFencing_Rejoin_OrphanAfterHardFencing(t *testing.T) {
 	})
 
 	replica := ag.Spec.Replicas[0]
-	r.tryRejoinReplica(context.Background(), ag, replica)
+	r.tryRejoinReplica(context.Background(), ag, &replica)
 
 	if !mock0.WasCalled("JoinAG") {
 		t.Error("expected JoinAG called for orphan replica")
@@ -697,7 +655,7 @@ func TestFencing_Rejoin_Unreachable_NoError(t *testing.T) {
 	})
 
 	// Should not panic or return error
-	r.tryRejoinReplica(context.Background(), ag, ag.Spec.Replicas[1])
+	r.tryRejoinReplica(context.Background(), ag, &ag.Spec.Replicas[1])
 
 	if mock1.WasCalled("JoinAG") {
 		t.Error("should not call JoinAG when unreachable")
@@ -717,7 +675,7 @@ func TestFencing_Rejoin_AlreadyConnected_Skip(t *testing.T) {
 	// Simulate the check pattern from the controller
 	connected := true // Already connected
 	if !connected {
-		r.tryRejoinReplica(context.Background(), ag, ag.Spec.Replicas[1])
+		r.tryRejoinReplica(context.Background(), ag, &ag.Spec.Replicas[1])
 	}
 
 	if mock1.WasCalled("JoinAG") {
@@ -737,7 +695,7 @@ func TestFencing_Rejoin_PrimaryDisconnected_Skip(t *testing.T) {
 	// Simulate the check pattern: skip if serverName == primaryReplica
 	replica := ag.Spec.Replicas[0]
 	if replica.ServerName != ag.Status.PrimaryReplica {
-		r.tryRejoinReplica(context.Background(), ag, replica)
+		r.tryRejoinReplica(context.Background(), ag, &replica)
 	}
 
 	if mock0.WasCalled("JoinAG") {

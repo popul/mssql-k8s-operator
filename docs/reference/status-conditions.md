@@ -81,6 +81,12 @@ All CRDs use a single condition type: `Ready`.
 | `AGProvisioning` | `False` | AG is being created or configured |
 | `AGReady` | `True` | AG is operational with primary and secondaries |
 | `PrimaryUnreachable` | `False` | Cannot connect to the primary replica |
+| `SplitBrainDetected` | `False` | Two or more replicas report PRIMARY simultaneously |
+| `FencingExecuted` | `False` | Soft fencing executed (rogue demoted to SECONDARY) |
+| `HardFencingExecuted` | `False` | Hard fencing executed (AG dropped on rogue, will rejoin) |
+| `FencingFailed` | `False` | Fencing SQL command failed (traffic already cut via label) |
+| `FencingExhausted` | `False` | Circuit-breaker: fencing failed repeatedly, manual intervention required |
+| `PrimaryChangedExternally` | `True` | Primary changed outside the operator (status corrected, no fencing) |
 
 ## Events
 

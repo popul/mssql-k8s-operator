@@ -26,7 +26,7 @@ spec:
 > server:
 >   host: mssql.database.svc.cluster.local
 >   credentialsSecret:
->     name: mssql-sa-credentials
+>     name: sa-credentials
 > ```
 
 ### Differential backup

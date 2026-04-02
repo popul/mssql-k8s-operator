@@ -3,15 +3,17 @@
 ## Install with Helm
 
 ```bash
-helm install mssql-operator ./charts/mssql-operator \
+helm install mssql-operator oci://ghcr.io/popul/mssql-k8s-operator/charts/mssql-operator \
   --namespace mssql-operator-system \
   --create-namespace
 ```
 
+> The operator image (`ghcr.io/popul/mssql-k8s-operator`) is pulled automatically by the chart.
+
 ## Install with custom values
 
 ```bash
-helm install mssql-operator ./charts/mssql-operator \
+helm install mssql-operator oci://ghcr.io/popul/mssql-k8s-operator/charts/mssql-operator \
   --namespace mssql-operator-system \
   --create-namespace \
   --set replicaCount=2 \
@@ -22,7 +24,7 @@ helm install mssql-operator ./charts/mssql-operator \
 Or use a values file:
 
 ```bash
-helm install mssql-operator ./charts/mssql-operator \
+helm install mssql-operator oci://ghcr.io/popul/mssql-k8s-operator/charts/mssql-operator \
   --namespace mssql-operator-system \
   --create-namespace \
   -f my-values.yaml
@@ -30,17 +32,27 @@ helm install mssql-operator ./charts/mssql-operator \
 
 See [Helm values reference](../reference/helm-values.md) for all options.
 
+## Install from source (development)
+
+```bash
+helm install mssql-operator ./charts/mssql-operator \
+  --namespace mssql-operator-system \
+  --create-namespace
+```
+
 ## Upgrade
 
 ```bash
-helm upgrade mssql-operator ./charts/mssql-operator \
+helm upgrade mssql-operator oci://ghcr.io/popul/mssql-k8s-operator/charts/mssql-operator \
   --namespace mssql-operator-system
 ```
 
 Helm does not update CRDs on upgrade. To update CRDs manually:
 
 ```bash
-kubectl apply -f charts/mssql-operator/crds/
+helm pull oci://ghcr.io/popul/mssql-k8s-operator/charts/mssql-operator \
+  --untar
+kubectl apply -f mssql-operator/crds/
 ```
 
 ## Uninstall

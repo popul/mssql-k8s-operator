@@ -94,7 +94,7 @@ The operator goes beyond basic failover to handle the hard problems of running S
 
 ```bash
 # Install the operator
-helm install mssql-operator ./charts/mssql-operator \
+helm install mssql-operator oci://ghcr.io/popul/mssql-k8s-operator/charts/mssql-operator \
   --namespace mssql-operator-system --create-namespace
 
 # Create secret

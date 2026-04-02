@@ -11,15 +11,20 @@ This guide covers deploying SQL Server in Kubernetes **manually** (Deployment, S
 ```bash
 kubectl create namespace mssql
 
+# SA password for the SQL Server container (env var format required by the image)
 kubectl create secret generic mssql-sa-password \
   --from-literal=MSSQL_SA_PASSWORD='YourStr0ngP@ssword!' \
   -n mssql
 
+# Operator credentials (username/password format required by the operator in external mode)
 kubectl create secret generic sa-credentials \
   --from-literal=username=sa \
   --from-literal=password='YourStr0ngP@ssword!' \
   -n mssql
 ```
+
+> **Note**: In external mode, the operator requires a separate credentials secret with `username` and `password` keys.
+> The single-secret shortcut (using only `saPasswordSecret`) is only available in [managed mode](deploy-sql-server.md).
 
 ### Step 2: Deploy SQL Server
 
