@@ -318,6 +318,13 @@ spec:
                   - type
                   type: object
                 type: array
+              consecutiveFencingCount:
+                description: |-
+                  ConsecutiveFencingCount tracks how many times the same replica (LastFencedReplica)
+                  has been fenced consecutively. Resets to 1 when a different replica is fenced.
+                  Used by the circuit-breaker to detect infinite fencing loops.
+                format: int32
+                type: integer
               databases:
                 description: Databases shows the observed state of each database in
                   the AG.
@@ -341,9 +348,24 @@ spec:
                   - name
                   type: object
                 type: array
+              fencingCount:
+                description: FencingCount is the total number of fencing operations
+                  executed (cumulative).
+                format: int32
+                type: integer
               lastAutoFailoverTime:
                 description: LastAutoFailoverTime records when the last automatic
                   failover was triggered.
+                format: date-time
+                type: string
+              lastFencedReplica:
+                description: |-
+                  LastFencedReplica is the server name of the last replica that was fenced.
+                  Used with LastFencingTime to detect repeated re-claims and escalate to hard fencing.
+                type: string
+              lastFencingTime:
+                description: LastFencingTime records when the last fencing operation
+                  was executed.
                 format: date-time
                 type: string
               observedGeneration:
